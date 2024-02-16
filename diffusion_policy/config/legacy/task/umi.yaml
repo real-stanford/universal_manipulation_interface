@@ -1,0 +1,45 @@
+name: umi
+
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    img:
+      shape: [3, 224, 224]
+      horizon: 2
+      type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      horizon: 2
+      type: low_dim
+    robot0_eef_rot_axis_angle:
+      raw_shape: [3]
+      shape: [6]
+      horizon: 2
+      type: low_dim
+      rotation_rep: rotation_6d
+    robot0_gripper_width:
+      shape: [1]
+      horizon: 2
+      type: low_dim
+  action: 
+    shape: [10]
+    horizon: 32
+    rotation_rep: rotation_6d
+
+task_name: &task_name umi
+dataset_path: &dataset_path /local/real/datasets/umi/move_cube_20231003/dataset.zarr.zip
+pose_repr: &pose_repr
+  obs_pose_repr: abs # abs or rel
+  action_pose_repr: abs
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.umi_dataset.UmiDataset
+  shape_meta: *shape_meta
+  dataset_path: *dataset_path
+  pose_repr: *pose_repr
+  temporally_independent_normalization: False
+  seed: 42
+  val_ratio: 0.02

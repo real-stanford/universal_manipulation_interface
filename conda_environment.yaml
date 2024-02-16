@@ -1,0 +1,59 @@
+name: umi
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip=22.1
+  - pytorch=2.1.0
+  - pytorch-cuda=12.1
+  - torchvision=0.16.0
+  - numpy=1.24
+  - scipy=1.11
+  - numba=0.57
+  - pandas=2.1
+  - py-opencv=4.7
+  - ipykernel=6.23
+  - matplotlib=3.7
+  - av=10.0
+  - k3d=2.15
+  - pyyaml=6.0
+  - tqdm=4.65
+  - zarr=2.16
+  - numcodecs=0.11
+  - hydra-core=1.2.0
+  - wandb=0.15.8
+  - dill=0.3.7
+  - einops=0.6.1
+  - diffusers=0.18.2
+  - scikit-video=1.1
+  - gym=0.21.0
+  # trick to avoid cpu affinity issue described in https://github.com/pytorch/pytorch/issues/99625
+  - llvm-openmp=14
+  - python-lmdb=1.4
+  - timm=0.9.7
+  - scikit-fda=0.9
+  - cython=0.29
+  - accelerate=0.24
+  - boto3=1.33
+  - exiftool=12
+  - aiohttp=3.9
+  - aiofiles=23.2
+  - pip:
+    - ray[default]==2.8.0
+    - threadpoolctl==3.2
+    - v4l2py==2.2
+    - ur-rtde==1.5.6
+    # requires apt install libspnav-dev spacenavd; systemctl start spacenavd
+    - spnav @ https://github.com/cheng-chi/spnav/archive/c1c938ebe3cc542db4685e0d13850ff1abfdb943.tar.gz
+    - atomics==1.0.2
+    - pynput==1.7.6
+    - fastcrc==0.2
+    - imagecodecs==2023.9.18
+    - robomimic==0.2.0
+    # requires mujoco py dependencies libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf
+    - free-mujoco-py==2.1.6
+    - robosuite @ https://github.com/cheng-chi/robosuite/archive/3f2c3116f1c0a1916e94bfa28da4d055927d1ab3.tar.gz
+    # implicitly depend on conda package exiftool
+    - PyExifTool==0.5
