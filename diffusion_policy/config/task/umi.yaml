@@ -83,7 +83,7 @@ shape_meta: &shape_meta
     rotation_rep: rotation_6d
 
 task_name: &task_name umi
-dataset_path: data/cup_in_the_wild/22040119_ms_wild_multicup_refilter.zarr.zip
+dataset_path: example_demo_session/dataset.zarr.zip
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta

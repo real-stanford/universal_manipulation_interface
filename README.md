@@ -36,22 +36,53 @@ We recommend [Miniforge](https://github.com/conda-forge/miniforge?tab=readme-ov-
 $ mamba env create -f conda_environment.yaml
 ```
 
+Activate environment
+```console
+$ conda activate umi
+(umi)$ 
+```
+
 ## Running UMI SLAM pipeline
-Copy all videos for a data collection **session** into folder `<session>`.
+Download example data
+```console
+(umi)$ wget --recursive --no-parent --no-host-directories --cut-dirs=2 --relative --reject="index.html*" https://real.stanford.edu/umi/data/example_demo_session/
+```
 
 Run SLAM pipeline
 ```console
-$ python run_slam_pipeline.py <session>
+(umi)$ python run_slam_pipeline.py example_demo_session
+
+...
+Found following cameras:
+camera_serial
+C3441328164125    5
+Name: count, dtype: int64
+Assigned camera_idx: right=0; left=1; non_gripper=2,3...
+             camera_serial  gripper_hw_idx                                     example_vid
+camera_idx                                                                                
+0           C3441328164125               0  demo_C3441328164125_2024.01.10_10.57.34.882133
+99% of raw data are used.
+defaultdict(<function main.<locals>.<lambda> at 0x7f471feb2310>, {})
+n_dropped_demos 0
 ````
+For this dataset, 99% of the data are useable (successful SLAM), with 0 demonstrations dropped. If your dataset has a low SLAM success rate, double check if you carefully followed our [data collection instruction](https://swanky-sphere-ad1.notion.site/UMI-Data-Collection-Instruction-4db1a1f0f2aa4a2e84d9742720428b4c). 
+
+Despite our significant effort on robustness improvement, OBR_SLAM3 is still the most fragile part of UMI pipeline. If you are an expert in SLAM, please consider contributing to our fork of [OBR_SLAM3](https://github.com/cheng-chi/ORB_SLAM3) which is specifically optimized for UMI workflow.
 
 Generate dataset for training.
 ```console
-$ python scripts_slam_pipeline/07_generate_replay_buffer.py -o dataset.zarr.zip <session>
+(umi)$ python scripts_slam_pipeline/07_generate_replay_buffer.py -o example_demo_session/dataset.zarr.zip example_demo_session
 ```
 
 ## Training Diffusion Policy
+Single-GPU training. Tested to work on RTX3090 24GB.
 ```console
-$ python train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=dataset.zarr.zip
+(umi)$ python train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=example_demo_session/dataset.zarr.zip
+```
+
+Multi-GPU training.
+```console
+(umi)$ accelerate --num_processes <ngpus> train.py --config-name=train_diffusion_unet_timm_umi_workspace task.dataset_path=example_demo_session/dataset.zarr.zip
 ```
 
 ## 🚧 More Detailed Documentation Coming Soon! 🚧
