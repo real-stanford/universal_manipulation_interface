@@ -1,0 +1,42 @@
+{
+  # robot configurations, 0->right 1->left
+  # comment out robot #1 if only using 1 arm
+  "robots": [
+    {
+      "robot_type": "ur5e",
+      "robot_ip": "192.168.0.8",
+      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
+      # table height for finger-table collision avoidance
+      # -inf to disable
+      "height_threshold": -0.024,
+      # sphere collision primitive size and location for inter-gripper collision avoidance
+      # 0 to disable
+      "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]
+    },
+    # {
+    #   "robot_type": "ur5",
+    #   "robot_ip": "192.168.0.9",
+    #   "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
+    #   "height_threshold": 0.022,
+    #   "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]
+    # }
+  ],
+  # gripper configurations, 0->right 1->left
+  "grippers": [
+    {
+      "gripper_ip": "192.168.0.18",
+      "gripper_port": 1000, "gripper_obs_latency": 0.01, "gripper_action_latency": 0.1
+    },
+    # {
+    #   "gripper_ip": "192.168.0.27",
+    #   "gripper_port": 1000, "gripper_obs_latency": 0.01, "gripper_action_latency": 0.1
+    # }
+  ],
+  # transformation right arm's base frame in left arm's base coordinate frame
+  "tx_left_right": [
+    [ 0.99996206,  0.00661996,  0.00566226, -0.01676012],
+    [-0.00663261,  0.99997554,  0.0022186 , -0.60552492],
+    [-0.00564743, -0.00225607,  0.99998151, -0.007277  ],
+    [ 0.        ,  0.        ,  0.        ,  1.        ]
+  ]
+}
