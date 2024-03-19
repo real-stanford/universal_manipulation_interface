@@ -7,6 +7,8 @@
 [[SLAM repo]](https://github.com/cheng-chi/ORB_SLAM3)
 [[SLAM docker]](https://hub.docker.com/r/chicheng/orb_slam3)
 
+<img width="100%" src="assets/umi_teaser.png">
+
 [Cheng Chi](http://cheng-chi.github.io/)<sup>1,2</sup>,
 [Zhenjia Xu](https://www.zhenjiaxu.com/)<sup>1,2</sup>,
 [Chuer Pan](https://chuerpan.com/)<sup>1</sup>,
@@ -128,7 +130,7 @@ In this section, we will demonstrate our real-world deployment/evaluation system
 ### 🤗 Reproducing Cup Arrangement Policy ☕
 Our in-the-wild cup arragement policy is trained with the distribution of ["espresso cup with saucer"](https://www.amazon.com/s?k=espresso+cup+with+saucer) on Amazon across 30 different locations around Stanford. We created a [Amazon shopping list](https://www.amazon.com/hz/wishlist/ls/Q0T8U2N5U3IU?ref_=wl_share) for all cups used for training. We published the processed [Zarr dataset and](https://real.stanford.edu/umi/data/zarr_datasets) pre-trained [checkpoint](https://real.stanford.edu/umi/data/pretrained_models/) (finetuned CLIP ViT-L backbone).
 
-<video autoplay loop muted playsinline style="width: 90%; "><source src="assets/umi_cup_in_the_wild.mp4" type="video/mp4"> </video>
+<img width="100%" src="assets/umi_cup.gif">
 
 Download pre-trained checkpoint.
 ```console
