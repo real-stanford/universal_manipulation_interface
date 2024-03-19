@@ -122,7 +122,8 @@ In this section, we will demonstrate our real-world deployment/evaluation system
 4. Setup GoPro:
     * Install GoPro Labs [firmware](https://gopro.com/en/us/info/gopro-labs).
     * Set date and time.
-    * Scan the following QR code for clean HDMI output <img width="50%" src="assets/QR-MHDMI1mV0r27Tp60fWe0hS0sLcFg1dV.png">
+    * Scan the following QR code for clean HDMI output 
+    <br><img width="50%" src="assets/QR-MHDMI1mV0r27Tp60fWe0hS0sLcFg1dV.png">
 5. Setup [3Dconnexion SpaceMouse](https://www.amazon.com/3Dconnexion-SpaceMouse-Wireless-universal-receiver/dp/B079V367MM):
     * Install libspnav `sudo apt install libspnav-dev spacenavd`
     * Start spnavd `sudo systemctl start spacenavd`
