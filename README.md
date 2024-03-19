@@ -7,7 +7,7 @@
 [[SLAM repo]](https://github.com/cheng-chi/ORB_SLAM3)
 [[SLAM docker]](https://hub.docker.com/r/chicheng/orb_slam3)
 
-<img width="100%" src="assets/umi_teaser.png">
+<img width="90%" src="assets/umi_teaser.png">
 
 [Cheng Chi](http://cheng-chi.github.io/)<sup>1,2</sup>,
 [Zhenjia Xu](https://www.zhenjiaxu.com/)<sup>1,2</sup>,
@@ -122,15 +122,15 @@ In this section, we will demonstrate our real-world deployment/evaluation system
 4. Setup GoPro:
     * Install GoPro Labs [firmware](https://gopro.com/en/us/info/gopro-labs).
     * Set date and time.
-    * Scan the following QR code for clean HDMI output <img width="70%" src="assets/QR-MHDMI1mV0r27Tp60fWe0hS0sLcFg1dV.png">
+    * Scan the following QR code for clean HDMI output <img width="50%" src="assets/QR-MHDMI1mV0r27Tp60fWe0hS0sLcFg1dV.png">
 5. Setup [3Dconnexion SpaceMouse](https://www.amazon.com/3Dconnexion-SpaceMouse-Wireless-universal-receiver/dp/B079V367MM):
     * Install libspnav `sudo apt install libspnav-dev spacenavd`
     * Start spnavd `sudo systemctl start spacenavd`
 
-### 🤗 Reproducing Cup Arrangement Policy ☕
+### 🤗 Reproducing the Cup Arrangement Policy ☕
 Our in-the-wild cup arragement policy is trained with the distribution of ["espresso cup with saucer"](https://www.amazon.com/s?k=espresso+cup+with+saucer) on Amazon across 30 different locations around Stanford. We created a [Amazon shopping list](https://www.amazon.com/hz/wishlist/ls/Q0T8U2N5U3IU?ref_=wl_share) for all cups used for training. We published the processed [Zarr dataset and](https://real.stanford.edu/umi/data/zarr_datasets) pre-trained [checkpoint](https://real.stanford.edu/umi/data/pretrained_models/) (finetuned CLIP ViT-L backbone).
 
-<img width="100%" src="assets/umi_cup.gif">
+<img width="90%" src="assets/umi_cup.gif">
 
 Download pre-trained checkpoint.
 ```console
