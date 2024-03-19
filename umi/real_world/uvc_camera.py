@@ -245,8 +245,8 @@ class UvcCamera(mp.Process):
                     self.video_recorder.write_img_buffer(frame, frame_time=t_cal)
 
                 data = dict()
-                data['camera_receive_timestamp'] = t_cap
-                data['camera_capture_timestamp'] = t_recv
+                data['camera_receive_timestamp'] = t_recv
+                data['camera_capture_timestamp'] = t_cap
                 data['color'] = frame
                 
                 # apply transform
