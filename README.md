@@ -109,6 +109,8 @@ In this section, we will demonstrate our real-world deployment/evaluation system
         * Set center of gravity to (2, -6, 37)mm, CX/CY/CZ.
     * TCP will be set automatically by the eval script.
     * On UR5e, switch control mode to remote.
+
+    If you are using Franka, follow this [instruction](franka_instruction.md).
 3. Setup WSG50 gripper with web interface:
     * Obtain IP address and update [eval_robots_config.yaml](example/eval_robots_config.yaml)/grippers/gripper_ip.
     * In Settings > Command Interface
