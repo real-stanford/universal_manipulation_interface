@@ -1,10 +1,11 @@
 import dh_device
 
-m_device = dh_device.dh_device()
-
 
 class dh_modbus_gripper(object):
-    gripper_ID = 0x01
+    
+    def __init__(self):
+        self.gripper_ID = 0x01
+        self.m_device = dh_device.dh_device()
 
     def CRC16(self, nData, wLength):
         if nData == 0x00:
@@ -24,7 +25,7 @@ class dh_modbus_gripper(object):
 
     def open(self, PortName, BaudRate):
         ret = 0
-        ret = m_device.connect_device(PortName, BaudRate)
+        ret = self.m_device.connect_device(PortName, BaudRate)
         if ret < 0:
             print("open failed")
             return ret
@@ -32,8 +33,8 @@ class dh_modbus_gripper(object):
             print("open successful")
             return ret
 
-    def close():
-        m_device.disconnect_device()
+    def close(self):
+        self.m_device.disconnect_device()
 
     def WriteRegisterFunc(self, index, value):
         send_buf = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -59,12 +60,12 @@ class dh_modbus_gripper(object):
                 break
             retrycount = retrycount - 1
 
-            wdlen = m_device.device_wrire(send_temp)
+            wdlen = self.m_device.device_wrire(send_temp)
             if len(send_temp) != wdlen:
                 print("write error ! write : ", send_temp)
                 continue
 
-            rev_buf = m_device.device_read(8)
+            rev_buf = self.m_device.device_read(8)
             if len(rev_buf) == wdlen:
                 ret = True
         return ret
@@ -93,12 +94,12 @@ class dh_modbus_gripper(object):
                 break
             retrycount = retrycount - 1
 
-            wdlen = m_device.device_wrire(send_temp)
+            wdlen = self.m_device.device_wrire(send_temp)
             if len(send_temp) != wdlen:
                 print("write error ! write : ", send_temp)
                 continue
 
-            rev_buf = m_device.device_read(7)
+            rev_buf = self.m_device.device_read(7)
             if len(rev_buf) == 7:
                 value = (rev_buf[4] & 0xFF) | (rev_buf[3] << 8)
                 ret = True
