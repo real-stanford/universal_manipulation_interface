@@ -30,12 +30,24 @@ def modbus_gripper():
         m_gripper.SetTargetPosition(0)
         while g_state == 0:
             g_state = m_gripper.GetGripState()
+            print(f"init state: {m_gripper.GetInitState()}")
+            print(f"gripper state: {m_gripper.GetGripState()}")
+            print(f"target position: {m_gripper.GetTargetPosition()}")
+            print(f"current position: {m_gripper.GetCurrentPosition()}")
+            print(f"target force: {m_gripper.GetTargetForce()}")
+            print(f"target speed: {m_gripper.GetTargetSpeed()}")
             sleep(0.2)
 
         g_state = 0
         m_gripper.SetTargetPosition(1000)
         while g_state == 0:
             g_state = m_gripper.GetGripState()
+            print(f"init state: {m_gripper.GetInitState()}")
+            print(f"gripper state: {m_gripper.GetGripState()}")
+            print(f"target position: {m_gripper.GetTargetPosition()}")
+            print(f"current position: {m_gripper.GetCurrentPosition()}")
+            print(f"target force: {m_gripper.GetTargetForce()}")
+            print(f"target speed: {m_gripper.GetTargetSpeed()}")
             sleep(0.2)
     m_gripper.close()
 
