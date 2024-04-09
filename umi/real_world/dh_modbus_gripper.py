@@ -138,21 +138,22 @@ class dh_modbus_gripper(object):
         return self.ReadRegisterFunc(0x0104)
 
     # get gripper initialization state
+    # 0，未初始化，1，初始化成功，2，初始化中
     def GetInitState(self):
         return self.ReadRegisterFunc(0x0200)
 
     # get gripper grip state
+    # 0，运动中，1，到达位置，2，夹住物体，3，物体掉落
     def GetGripState(self):
         return self.ReadRegisterFunc(0x0201)
 
     # get states: initialize, grip, position, target position, target force
     def GetRunStates(self):
-        states = [0, 0, 0, 0, 0]
-        states[0] = self.GetInitState()
-        states[1] = self.GetGripState()
-        states[2] = self.GetCurrentPosition()
-        states[3] = self.GetTargetPosition()
-        states[4] = self.GetTargetForce()
+        states = {}
+        states['state'] = self.GetGripState()
+        states['position'] = self.GetCurrentPosition()  # 检查数值的单位，确保为m
+        states['velocity'] = self.GetTargetSpeed()      # 检查数值的单位，确保为m/s。注意返回的是预设的速度，而不是当前的速度，跟UMI原始代码可能有出入
+        states['force_motor'] = self.GetTargetForce()   # 检查数值单位，确保为N。注意返回的是预设的力，而不是当前的力，跟UMI原始代码可能有出入
         return states
 
     """description of class"""
