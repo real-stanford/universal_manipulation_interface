@@ -21,10 +21,10 @@ class DHController(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         band_rate=115200,
-        port="ttyUSB0",
-        frequency=30,  # 手册没查询到，一般在30左右，跟wsg夹爪保持一致
-        move_max_speed=0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
-        max_width=0.08,  # 夹爪的最大打开宽度，单位m
+        port="ttyUSBDH",
+        frequency=30,               # 手册没查询到，一般20-40Hz，跟wsg夹爪保持一致
+        move_max_speed=0.07273,     # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
+        max_width=0.08,             # 夹爪的最大打开宽度，单位m
         get_max_k=None,
         command_queue_size=1024,
         launch_timeout=3,
