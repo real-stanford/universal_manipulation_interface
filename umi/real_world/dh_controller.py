@@ -23,8 +23,9 @@ class DHController(mp.Process):
         band_rate=115200,
         port="ttyUSBDH",
         frequency=30,  # 手册没查询到，一般20-40Hz，跟wsg夹爪保持一致
-        move_max_speed=0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
+        max_speed=0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
         max_width=0.08,  # 夹爪的最大打开宽度，单位m
+        max_force=140,  # 夹爪的最大力
         get_max_k=None,
         command_queue_size=1024,
         launch_timeout=3,
@@ -36,8 +37,9 @@ class DHController(mp.Process):
         self.band_rate = band_rate
         self.port = port
         self.frequency = frequency
-        self.move_max_speed = move_max_speed
+        self.max_speed = max_speed
         self.max_width = max_width
+        self.max_force = max_force
         self.launch_timeout = launch_timeout
         self.receive_latency = receive_latency
         self.scale = 1000.0 if use_meters else 1.0
@@ -139,7 +141,13 @@ class DHController(mp.Process):
     def run(self):
         # start connection
         try:
-            with dh_modbus_gripper(self.port, self.band_rate) as dh:
+            with dh_modbus_gripper(
+                self.port,
+                self.band_rate,
+                self.max_width,
+                self.max_speed,
+                self.max_force,
+            ) as dh:
 
                 # home gripper to initialize
                 dh.Initialization()
@@ -149,15 +157,8 @@ class DHController(mp.Process):
                     initstate = dh.GetInitState()
                     time.sleep(0.2)
 
-                # home gripper to initialize
-                # wsg.ack_fault()
-                # wsg.homing(positive_direction=self.home_to_open, wait=True)
-
                 # get initial
-                # curr_info = wsg.script_query()
-                # curr_pos = curr_info['position']
-                # curr_pos = 100.0
-                curr_pos = dh.GetCurrentPosition()  # 检查单位，理论上curr_pos的单位是米
+                curr_pos = dh.GetCurrentAbsPosition()
                 curr_t = time.monotonic()
                 last_waypoint_time = curr_t
                 pose_interp = PoseTrajectoryInterpolator(
@@ -178,12 +179,8 @@ class DHController(mp.Process):
                     # info = wsg.script_position_pd(
                     #     position=target_pos, velocity=target_vel)
                     # time.sleep(1e-3)
-                    dh.SetTargetSpeed(
-                        100.0 * target_vel / self.move_max_speed
-                    )  # 参数是最大速度的百分比
-                    dh.SetTargetPosition(
-                        1000.0 * target_pos / self.max_width
-                    )  # 需要检查target_pos和max_width的单位是否相同
+                    dh.SetTargetAbsSpeed(target_vel)
+                    dh.SetTargetAbsPosition(target_pos)
                     info = dh.GetRunStates()
 
                     # get state from robot
@@ -225,8 +222,8 @@ class DHController(mp.Process):
                             pose_interp = pose_interp.schedule_waypoint(
                                 pose=[target_pos, 0, 0, 0, 0, 0],
                                 time=target_time,
-                                max_pos_speed=self.move_max_speed,
-                                max_rot_speed=self.move_max_speed,
+                                max_pos_speed=self.max_speed,
+                                max_rot_speed=self.max_speed,
                                 curr_time=curr_time,
                                 last_waypoint_time=last_waypoint_time,
                             )

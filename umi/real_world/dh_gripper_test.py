@@ -1,6 +1,6 @@
 import sys
 import glob
-import dh_modbus_gripper
+from umi.real_world import dh_modbus_gripper
 from time import sleep
 
 

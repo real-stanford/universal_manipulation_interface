@@ -1,18 +1,24 @@
-import dh_device
+from umi.real_world import dh_device
+import time
 
 
 class dh_modbus_gripper(object):
-    
-    def __init__(self, port_name, baud_rate):
+
+    def __init__(
+        self, port_name, baud_rate, max_width=0.08, max_speed=0.07273, max_force=140
+    ):
         self.gripper_ID = 0x01
         self.m_device = dh_device.dh_device()
         self.port_name = port_name
         self.baud_rate = baud_rate
+        self.max_width = max_width
+        self.max_speed = max_speed
+        self.max_force = max_force
 
     def __enter__(self):
         self.open()
         return self
-    
+
     def __exit__(self):
         self.close()
         return self
@@ -135,7 +141,7 @@ class dh_modbus_gripper(object):
     def GetCurrentPosition(self):
         return self.ReadRegisterFunc(0x0202)
 
-    # get gripper target position 
+    # get gripper target position
     def GetTargetPosition(self):
         return self.ReadRegisterFunc(0x0103)
 
@@ -146,6 +152,34 @@ class dh_modbus_gripper(object):
     # get gripper current target speed (Notice: Not actual speed)
     def GetTargetSpeed(self):
         return self.ReadRegisterFunc(0x0104)
+
+    # set gripper target position
+    def SetTargetAbsPosition(self, refpos):
+        self.WriteRegisterFunc(0x0103, int(refpos / self.max_width * 1000.0))
+
+    # set gripper target force
+    def SetTargetAbsForce(self, force):
+        self.WriteRegisterFunc(0x0101, int(force / self.max_force * 100.0))
+
+    # set gripper target speed 1-100 %
+    def SetTargetAbsSpeed(self, speed):
+        self.WriteRegisterFunc(0x0104, int(speed / self.max_speed * 100.0))
+
+    # get gripper current position
+    def GetCurrentAbsPosition(self):
+        return self.ReadRegisterFunc(0x0202) / 1000.0 * self.max_width
+
+    # get gripper target position
+    def GetTargetAbsPosition(self):
+        return self.ReadRegisterFunc(0x0103) / 1000.0 * self.max_width
+
+    # get gripper current target force (Notice: Not actual force)
+    def GetTargetAbsForce(self):
+        return self.ReadRegisterFunc(0x0101) / 100.0 * self.max_force
+
+    # get gripper current target speed (Notice: Not actual speed)
+    def GetTargetAbsSpeed(self):
+        return self.ReadRegisterFunc(0x0104) / 100.0 * self.max_speed
 
     # get gripper initialization state
     # 0，未初始化，1，初始化成功，2，初始化中
@@ -160,10 +194,15 @@ class dh_modbus_gripper(object):
     # get states: initialize, grip, position, target position, target force
     def GetRunStates(self):
         states = {}
-        states['state'] = self.GetGripState()
-        states['position'] = self.GetCurrentPosition()  # 检查数值的单位，确保为m
-        states['velocity'] = self.GetTargetSpeed()      # 检查数值的单位，确保为m/s。注意返回的是预设的速度，而不是当前的速度，跟UMI原始代码可能有出入
-        states['force_motor'] = self.GetTargetForce()   # 检查数值单位，确保为N。注意返回的是预设的力，而不是当前的力，跟UMI原始代码可能有出入
+        states["state"] = self.GetGripState()
+        states["position"] = self.GetCurrentAbsPosition()  # 单位m
+        states["velocity"] = (
+            self.GetTargetAbsSpeed()
+        )  # 单位m/s，注意返回的是预设的速度，而不是当前的速度，跟UMI原始代码可能有出入
+        states["force_motor"] = (
+            self.GetTargetAbsForce()
+        )  # 单位N，注意返回的是预设的力，而不是当前的力，跟UMI原始代码可能有出入
+        states["measure_timestamp"] = time.time()
         return states
 
     """description of class"""
