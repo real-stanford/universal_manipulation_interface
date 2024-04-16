@@ -182,7 +182,7 @@ class DHController(mp.Process):
                     dh.SetTargetAbsSpeed(target_vel)
                     dh.SetTargetAbsPosition(target_pos)
                     dh.SetTargetSpeed(
-                        int(100 * target_vel / self.move_max_speed)
+                        int(100 * target_vel / self.max_speed)
                     )  # 参数是最大速度的百分比
                     dh.SetTargetPosition(
                         int(1000 * target_pos / self.max_width)
