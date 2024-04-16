@@ -25,7 +25,7 @@ from umi.common.precise_sleep import precise_wait
 @click.option('-f', '--frequency', type=float, default=30)
 @click.option('-gs', '--gripper_speed', type=float, default=0.07273)
 def main(robot_hostname, frequency, gripper_speed):
-    max_pos_speed = 0.25
+    max_pos_speed = 0.1
     max_rot_speed = 0.6
     max_gripper_width = 0.08
     cube_diag = np.linalg.norm([1,1,1])
@@ -70,11 +70,12 @@ def main(robot_hostname, frequency, gripper_speed):
 
                 precise_wait(t_sample)
                 # sm_state = [0, 0, 0, 0, 0, 0]
-                if time.time() - ur_start_time > 5:
+                dpos = 0.0
+                if time.time() - ur_start_time > 4:
                     dpos = -max_pos_speed / frequency
-                elif time.time() - ur_start_time > 10:
-                    dpos = max_pos_speed / frequency
                     ur_start_time = time.time()
+                elif time.time() - ur_start_time > 2:
+                    dpos = max_pos_speed / frequency
                 target_pose[2] = target_pose[2] + dpos
 
                 # dpos = sm_state[:3] * (max_pos_speed / frequency)
@@ -86,11 +87,11 @@ def main(robot_hostname, frequency, gripper_speed):
                 #     target_pose[3:])).as_rotvec()
                     
                 dpos = 0
-                if time.time() - dh_start_time > 3:
+                if time.time() - dh_start_time > 6:
                     dpos = -gripper_speed / frequency
-                elif time.time() - dh_start_time > 6:
-                    dpos = gripper_speed / frequency
                     dh_start_time = time.time()
+                elif time.time() - dh_start_time > 3:
+                    dpos = gripper_speed / frequency
                 gripper_target_pos = np.clip(gripper_target_pos + dpos, 0, max_gripper_width)
  
                 controller.schedule_waypoint(target_pose, 
