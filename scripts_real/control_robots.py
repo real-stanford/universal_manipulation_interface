@@ -71,11 +71,13 @@ def main(robot_hostname, frequency, gripper_speed):
                 precise_wait(t_sample)
                 # sm_state = [0, 0, 0, 0, 0, 0]
                 dpos = 0.0
-                if time.time() - ur_start_time > 4:
+                ur_time = 2
+                if time.time() - ur_start_time < ur_time:
                     dpos = -max_pos_speed / frequency
-                    ur_start_time = time.time()
-                elif time.time() - ur_start_time > 2:
+                if time.time() - ur_start_time > ur_time and time.time() - ur_start_time < 2 * ur_time:
                     dpos = max_pos_speed / frequency
+                if time.time() - ur_start_time > 2 * ur_time:
+                    ur_start_time = time.time()
                 target_pose[2] = target_pose[2] + dpos
 
                 # dpos = sm_state[:3] * (max_pos_speed / frequency)
@@ -87,11 +89,13 @@ def main(robot_hostname, frequency, gripper_speed):
                 #     target_pose[3:])).as_rotvec()
                     
                 dpos = 0
-                if time.time() - dh_start_time > 6:
+                dh_time = 3
+                if time.time() - dh_start_time < dh_time:
                     dpos = -gripper_speed / frequency
-                    dh_start_time = time.time()
-                elif time.time() - dh_start_time > 3:
+                if time.time() - dh_start_time > dh_time and time.time() - dh_start_time < 2 * dh_time:
                     dpos = gripper_speed / frequency
+                if time.time() - dh_start_time > 2 * dh_time:
+                    dh_start_time = time.time()
                 gripper_target_pos = np.clip(gripper_target_pos + dpos, 0, max_gripper_width)
  
                 controller.schedule_waypoint(target_pose, 
