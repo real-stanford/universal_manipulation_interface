@@ -3,9 +3,19 @@ import dh_device
 
 class dh_modbus_gripper(object):
     
-    def __init__(self):
+    def __init__(self, port_name, baud_rate):
         self.gripper_ID = 0x01
         self.m_device = dh_device.dh_device()
+        self.port_name = port_name
+        self.baud_rate = baud_rate
+
+    def __enter__(self):
+        self.open()
+        return self
+    
+    def __exit__(self):
+        self.close()
+        return self
 
     def CRC16(self, nData, wLength):
         if nData == 0x00:
@@ -23,9 +33,9 @@ class dh_modbus_gripper(object):
                     wCRCWord >>= 1
         return wCRCWord
 
-    def open(self, PortName, BaudRate):
+    def open(self):
         ret = 0
-        ret = self.m_device.connect_device(PortName, BaudRate)
+        ret = self.m_device.connect_device(self.port_name, self.baud_rate)
         if ret < 0:
             print("open failed")
             return ret

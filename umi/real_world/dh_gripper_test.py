@@ -3,18 +3,17 @@ import glob
 import dh_modbus_gripper
 from time import sleep
 
-m_gripper = dh_modbus_gripper.dh_modbus_gripper()
-
 
 def modbus_gripper():
-    port = "ttyUSBDH"    # please make sure you have the permission to access this port.
+    port = "ttyUSBDH"  # please make sure you have the permission to access this port.
     baudrate = 115200
     initstate = 0
     g_state = 0
     force = 100
     speed = 100
 
-    m_gripper.open(port, baudrate)
+    m_gripper = dh_modbus_gripper.dh_modbus_gripper(port, baudrate)
+    m_gripper.open()
     m_gripper.Initialization()
     print("Send grip init")
 
