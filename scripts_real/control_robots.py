@@ -69,21 +69,22 @@ def main(robot_hostname, frequency, gripper_speed):
                 t_command_target = t_cycle_end + dt
 
                 precise_wait(t_sample)
-                sm_state = [0, 0, 0, 0, 0, 0]
+                # sm_state = [0, 0, 0, 0, 0, 0]
                 if time.time() - ur_start_time > 5:
-                    sm_state[2] = 1
+                    dpos = -max_pos_speed / frequency
                 elif time.time() - ur_start_time > 10:
-                    sm_state[2] = -1
+                    dpos = max_pos_speed / frequency
                     ur_start_time = time.time()
+                target_pose[2] = target_pose[2] + dpos
 
-                dpos = sm_state[:3] * (max_pos_speed / frequency)
-                drot_xyz = sm_state[3:] * (max_rot_speed / frequency)
+                # dpos = sm_state[:3] * (max_pos_speed / frequency)
+                # drot_xyz = sm_state[3:] * (max_rot_speed / frequency)
 
-                drot = st.Rotation.from_euler('xyz', drot_xyz)
-                target_pose[:3] += dpos
-                target_pose[3:] = (drot * st.Rotation.from_rotvec(
-                    target_pose[3:])).as_rotvec()
-                
+                # drot = st.Rotation.from_euler('xyz', drot_xyz)
+                # target_pose[:3] += dpos
+                # target_pose[3:] = (drot * st.Rotation.from_rotvec(
+                #     target_pose[3:])).as_rotvec()
+                    
                 dpos = 0
                 if time.time() - dh_start_time > 3:
                     dpos = -gripper_speed / frequency
