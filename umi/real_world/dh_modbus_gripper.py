@@ -1,6 +1,12 @@
+<<<<<<< HEAD
 from umi.real_world import dh_device
 import time
 
+=======
+from umi.real_world.dh_device import dh_device
+# import dh_device
+import time 
+>>>>>>> fix several issues
 
 class dh_modbus_gripper(object):
 
@@ -8,7 +14,7 @@ class dh_modbus_gripper(object):
         self, port_name, baud_rate, max_width=0.08, max_speed=0.07273, max_force=140
     ):
         self.gripper_ID = 0x01
-        self.m_device = dh_device.dh_device()
+        self.m_device = dh_device()
         self.port_name = port_name
         self.baud_rate = baud_rate
         self.max_width = max_width
@@ -194,6 +200,7 @@ class dh_modbus_gripper(object):
     # get states: initialize, grip, position, target position, target force
     def GetRunStates(self):
         states = {}
+<<<<<<< HEAD
         states["state"] = self.GetGripState()
         states["position"] = self.GetCurrentAbsPosition()  # 单位m
         states["velocity"] = (
@@ -203,6 +210,13 @@ class dh_modbus_gripper(object):
             self.GetTargetAbsForce()
         )  # 单位N，注意返回的是预设的力，而不是当前的力，跟UMI原始代码可能有出入
         states["measure_timestamp"] = time.time()
+=======
+        states['state'] = self.GetGripState()
+        states['position'] = self.GetCurrentPosition()  # 检查数值的单位，确保为m
+        states['velocity'] = self.GetTargetSpeed()      # 检查数值的单位，确保为m/s。注意返回的是预设的速度，而不是当前的速度，跟UMI原始代码可能有出入
+        states['force_motor'] = self.GetTargetForce()   # 检查数值单位，确保为N。注意返回的是预设的力，而不是当前的力，跟UMI原始代码可能有出入
+        states['measure_timestamp'] = time.time()
+>>>>>>> fix several issues
         return states
 
     """description of class"""

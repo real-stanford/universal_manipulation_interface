@@ -5,7 +5,7 @@ from time import sleep
 
 
 def modbus_gripper():
-    port = "ttyUSBDH"  # please make sure you have the permission to access this port.
+    port = "/dev/ttyUSBDH_"  # please make sure you have the permission to access this port.
     baudrate = 115200
     initstate = 0
     g_state = 0

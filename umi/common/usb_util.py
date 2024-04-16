@@ -82,6 +82,6 @@ def get_sorted_v4l_paths(by_id=True):
         if index == 0:
             valid_paths.append(dev_path)
 
-    result = [str(x.absolute()) for x in valid_paths]
+    result = [str(x.absolute()) for x in valid_paths[1:]]
 
     return result

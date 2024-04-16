@@ -14,7 +14,7 @@ import numpy as np
 from collections import deque
 from tqdm import tqdm
 from multiprocessing.managers import SharedMemoryManager
-from umi.real_world.wsg_controller import WSGController
+from umi.real_world.dh_controller import DHController
 from umi.common.precise_sleep import precise_sleep
 from umi.common.latency_util import get_latency
 from matplotlib import pyplot as plt
@@ -33,7 +33,7 @@ def main(hostname, port, frequency):
     width = value * 80
 
     with SharedMemoryManager() as shm_manager:
-        with WSGController(
+        with DHController(
             shm_manager=shm_manager,
             hostname=hostname,
             port=port,

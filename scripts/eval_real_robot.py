@@ -21,7 +21,7 @@ import scipy.spatial.transform as st
 from umi.real_world.spacemouse_shared_memory import Spacemouse
 from umi.real_world.uvc_camera import UvcCamera
 from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
-from umi.real_world.wsg_controller import WSGController
+from umi.real_world.dh_controller import DHController
 from umi.real_world.keystroke_counter import KeystrokeCounter, KeyCode, Key
 from umi.common.usb_util import create_usb_list
 from umi.common.precise_sleep import precise_wait
@@ -143,7 +143,7 @@ def main(input, robot_hostname, gripper_hostname, gripper_port, frequency, video
             dev_usb_path=dev_usb_path,
             resolution=capture_res
         ) as camera,\
-        WSGController(
+        DHController(
             shm_manager=shm_manager,
             hostname=gripper_hostname,
             port=gripper_port,

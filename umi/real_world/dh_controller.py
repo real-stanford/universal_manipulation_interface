@@ -21,7 +21,7 @@ class DHController(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         band_rate=115200,
-        port="ttyUSBDH",
+        port="/dev/ttyUSBDH_",
         frequency=30,  # 手册没查询到，一般20-40Hz，跟wsg夹爪保持一致
         max_speed=0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
         max_width=0.08,  # 夹爪的最大打开宽度，单位m
@@ -96,7 +96,7 @@ class DHController(mp.Process):
 
     def start_wait(self):
         self.ready_event.wait(self.launch_timeout)
-        assert self.is_alive()
+        #assert self.is_alive()
 
     def stop_wait(self):
         self.join()
@@ -181,6 +181,12 @@ class DHController(mp.Process):
                     # time.sleep(1e-3)
                     dh.SetTargetAbsSpeed(target_vel)
                     dh.SetTargetAbsPosition(target_pos)
+                    dh.SetTargetSpeed(
+                        int(100 * target_vel / self.move_max_speed)
+                    )  # 参数是最大速度的百分比
+                    dh.SetTargetPosition(
+                        int(1000 * target_pos / self.max_width)
+                    )  # 需要检查target_pos和max_width的单位是否相同
                     info = dh.GetRunStates()
 
                     # get state from robot

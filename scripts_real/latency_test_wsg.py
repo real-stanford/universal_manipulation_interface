@@ -32,7 +32,7 @@ def main(output, hostname, port, frequency, max_speed, max_pos):
     command_latency = 0.0
     dt = 1/frequency
 
-    widths = 
+    # widths = 
 
     with SharedMemoryManager() as shm_manager:
         with WSGController(
