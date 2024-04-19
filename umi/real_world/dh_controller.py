@@ -23,7 +23,7 @@ class DHController(mp.Process):
         band_rate=115200,
         port="/dev/ttyUSBDH_",
         frequency=30,  # 手册没查询到，一般20-40Hz，跟wsg夹爪保持一致
-        max_speed=0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
+        max_speed=0.5, #0.07273,  # 双侧夹爪相对的速度，单位m/s (根据手册，打开时间约1.1s)
         max_width=0.08,  # 夹爪的最大打开宽度，单位m
         max_force=140,  # 夹爪的最大力
         get_max_k=None,
@@ -42,7 +42,7 @@ class DHController(mp.Process):
         self.max_force = max_force
         self.launch_timeout = launch_timeout
         self.receive_latency = receive_latency
-        self.scale = 1000.0 if use_meters else 1.0
+        self.scale = 1.0 if use_meters else 1000.0
         self.verbose = verbose
 
         if get_max_k is None:
@@ -168,6 +168,9 @@ class DHController(mp.Process):
                 keep_running = True
                 t_start = time.monotonic()
                 iter_idx = 0
+                target_pos = curr_pos
+                target_vel = self.max_speed
+                picked = False
                 while keep_running:
                     # command gripper
                     t_now = time.monotonic()
@@ -179,14 +182,24 @@ class DHController(mp.Process):
                     # info = wsg.script_position_pd(
                     #     position=target_pos, velocity=target_vel)
                     # time.sleep(1e-3)
-                    dh.SetTargetAbsSpeed(target_vel)
+                    dh.SetTargetAbsForce(10.0)
+                    origin_target_pos = target_pos
+                    # dh.SetTargetAbsSpeed(target_vel)
+                    tmp=target_pos
+                    if target_pos<0.065:
+                        tmp=target_pos-0.01
+                    # if target_pos>0.06:
+                    #     tmp=target_pos+0.01
+                    target_pos=tmp
+                        # picked = True
                     dh.SetTargetAbsPosition(target_pos)
-                    dh.SetTargetSpeed(
-                        int(100 * target_vel / self.max_speed)
-                    )  # 参数是最大速度的百分比
-                    dh.SetTargetPosition(
-                        int(1000 * target_pos / self.max_width)
-                    )  # 需要检查target_pos和max_width的单位是否相同
+                    #print("origin_target_pos, target_vel, target_pos", origin_target_pos, target_vel, target_pos)
+                    # dh.SetTargetSpeed(
+                    #     int(100 * target_vel / self.max_speed)
+                    # )  # 参数是最大速度的百分比
+                    # dh.SetTargetPosition(
+                    #     int(1000 * target_pos / self.max_width)
+                    # )  # 需要检查target_pos和max_width的单位是否相同
                     info = dh.GetRunStates()
 
                     # get state from robot

@@ -95,6 +95,7 @@ class RTDEInterpolationController(mp.Process):
         self.soft_real_time = soft_real_time
         self.receive_latency = receive_latency
         self.verbose = verbose
+        self.reset = False
 
         if get_max_k is None:
             get_max_k = int(frequency * 5)
@@ -179,6 +180,11 @@ class RTDEInterpolationController(mp.Process):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
         
+    def servoJ(self):  
+        # self.rtde_c.moveJ(self.joints_init, self.joints_init_speed, 1.4)
+        print('call servoJ')
+        self.reset=True
+     
     # ========= command methods ============
     def servoL(self, pose, duration=0.1):
         """
@@ -261,6 +267,11 @@ class RTDEInterpolationController(mp.Process):
             iter_idx = 0
             keep_running = True
             while keep_running:
+                if self.reset:
+                    print('reset move lll')
+                    self.reset=False
+                    assert rtde_c.moveJ(self.joints_init, self.joints_init_speed, 1.4)
+                    print('reset move')
                 # start control iteration
                 # t_start = rtde_c.initPeriod()
 

@@ -114,7 +114,7 @@ def solve_sphere_collision(ee_poses, robots_config):
 @click.option('--match_camera', '-mc', default=0, type=int)
 @click.option('--camera_reorder', '-cr', default='0')
 @click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
-@click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
+@click.option('--init_joints', '-j', is_flag=True, default=True, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")
 @click.option('--max_duration', '-md', default=2000000, help='Max duration for each epoch in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
@@ -192,8 +192,8 @@ def main(input, output, robot_config,
                 fisheye_converter=fisheye_converter,
                 mirror_swap=mirror_swap,
                 # action
-                max_pos_speed=2.0,
-                max_rot_speed=6.0,
+                max_pos_speed=2.0, #0.1
+                max_rot_speed=6.0, #0.3
                 shm_manager=shm_manager) as env:
             cv2.setNumThreads(2)
             print("Waiting for camera")
@@ -251,6 +251,7 @@ def main(input, output, robot_config,
                     obs[f'robot{robot_id}_eef_rot_axis_angle']
                 ], axis=-1)[-1]
                 episode_start_pose.append(pose)
+                # print('episode start pose appended', pose)
             with torch.no_grad():
                 policy.reset()
                 obs_dict_np = get_real_umi_obs_dict(
@@ -377,6 +378,10 @@ def main(input, output, robot_config,
                             control_robot_idx_list = [0]
                         elif key_stroke == KeyCode(char='2'):
                             control_robot_idx_list = [1]
+                        elif key_stroke == KeyCode(char='r'):
+                            print('enter r')
+                            for robot_idx in range(1):
+                                env.robots[0].servoJ()
 
                     if start_policy:
                         break
@@ -449,6 +454,7 @@ def main(input, output, robot_config,
                             obs[f'robot{robot_id}_eef_rot_axis_angle']
                         ], axis=-1)[-1]
                         episode_start_pose.append(pose)
+                        print('episode start pose appended in policy control', pose)
 
                     # wait for 1/30 sec to get the closest frame actually
                     # reduces overall latency
@@ -464,6 +470,7 @@ def main(input, output, robot_config,
                         # get obs
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
+                        # print('Obs: ', obs)
                         print(f'Obs latency {time.time() - obs_timestamps[-1]}')
 
                         # run inference
@@ -477,8 +484,10 @@ def main(input, output, robot_config,
                             obs_dict = dict_apply(obs_dict_np, 
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
                             result = policy.predict_action(obs_dict)
+                            # print('predict action:', result)
                             raw_action = result['action_pred'][0].detach().to('cpu').numpy()
                             action = get_real_umi_action(raw_action, obs, action_pose_repr)
+                            #print('real umi action', action)
                             print('Inference latency:', time.time() - s)
                         
                         # convert policy action to env actions
@@ -525,6 +534,7 @@ def main(input, output, robot_config,
                             compensate_latency=True
                         )
                         print(f"Submitted {len(this_target_poses)} steps of actions.")
+                        # print('Submitted poses', this_target_poses)
 
                         # visualize
                         episode_id = env.replay_buffer.n_episodes

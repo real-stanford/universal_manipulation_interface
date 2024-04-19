@@ -202,7 +202,7 @@ class BimanualUmiEnv:
             )
 
         cube_diag = np.linalg.norm([1,1,1])
-        j_init = np.array([0,-90,-90,-90,90,0]) / 180 * np.pi
+        j_init = np.array([175.99,-63.23,147.57,-223.03,-49.08,-37.95]) / 180 * np.pi
         if not init_joints:
             j_init = None
 
@@ -225,7 +225,7 @@ class BimanualUmiEnv:
                     payload_mass=None,
                     payload_cog=None,
                     joints_init=j_init,
-                    joints_init_speed=1.05,
+                    joints_init_speed=0.5,
                     soft_real_time=False,
                     verbose=False,
                     receive_keys=None,
@@ -516,6 +516,7 @@ class BimanualUmiEnv:
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
+                print('gripper waypoint: ', g_actions)
                 gripper.schedule_waypoint(
                     pos=g_actions,
                     target_time=new_timestamps[i] - g_latency

@@ -23,7 +23,7 @@ from umi.common.precise_sleep import precise_wait
 # @click.option('-gh', '--gripper_hostname', default='172.24.95.27')
 # @click.option('-gp', '--gripper_port', type=int, default=1000)
 @click.option('-f', '--frequency', type=float, default=30)
-@click.option('-gs', '--gripper_speed', type=float, default=0.07273)
+@click.option('-gs', '--gripper_speed', type=float, default=0.8)
 def main(robot_hostname, frequency, gripper_speed):
     max_pos_speed = 0.1
     max_rot_speed = 0.6
