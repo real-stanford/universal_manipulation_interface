@@ -186,14 +186,14 @@ class DHController(mp.Process):
                     origin_target_pos = target_pos
                     # dh.SetTargetAbsSpeed(target_vel)
                     tmp=target_pos
-                    if target_pos<0.065:
+                    if target_pos<0.068:
                         tmp=target_pos-0.01
                     # if target_pos>0.06:
                     #     tmp=target_pos+0.01
                     target_pos=tmp
                         # picked = True
                     dh.SetTargetAbsPosition(target_pos)
-                    #print("origin_target_pos, target_vel, target_pos", origin_target_pos, target_vel, target_pos)
+                    print("origin_target_pos, target_vel, target_pos", origin_target_pos, target_vel, target_pos)
                     # dh.SetTargetSpeed(
                     #     int(100 * target_vel / self.max_speed)
                     # )  # 参数是最大速度的百分比

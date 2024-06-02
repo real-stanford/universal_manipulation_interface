@@ -24,6 +24,7 @@ from umi.common.pose_util import pose_to_pos_rot
 from umi.common.interpolation_util import get_interp1d, PoseInterpolator
 
 
+
 class BimanualUmiEnv:
     def __init__(self, 
             # required params
@@ -202,7 +203,9 @@ class BimanualUmiEnv:
             )
 
         cube_diag = np.linalg.norm([1,1,1])
-        j_init = np.array([175.99,-63.23,147.57,-223.03,-49.08,-37.95]) / 180 * np.pi
+        # j_init = np.array([175.99,-63.23,147.57,-223.03,-49.08,-37.95]) / 180 * np.pi
+        # j_init = np.array([191.73,-45.56,107.84,-215.72,-73.55,-18.10]) / 180 * np.pi  #for cup placement
+        j_init = np.array([30.65,-61.67,-131.53,-40.76,87.17,-3.04]) / 180 * np.pi  # for fold shirt
         if not init_joints:
             j_init = None
 

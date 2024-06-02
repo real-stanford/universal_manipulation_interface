@@ -6,6 +6,7 @@ import sys
 import os
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+print(ROOT_DIR)
 sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 
@@ -42,7 +43,9 @@ def main(docker_image, num_workers, no_docker_pull, session_dir):
 
     for session in session_dir:
         input_dir = pathlib.Path(os.path.expanduser(session)).joinpath('demos')
+        print(input_dir)
         input_video_dirs = [x.parent for x in input_dir.glob('*/raw_video.mp4')]
+        print(input_video_dirs)
         print(f'Found {len(input_video_dirs)} video dirs')
 
         with tqdm(total=len(input_video_dirs)) as pbar:
