@@ -155,6 +155,178 @@ If everything are setup correctly, your robot should be able to rotate the cup a
 
 Known issue ⚠️: The policy doesn't work well under direct sunlight, since the dataset was collected during a rainiy week at Stanford.
 
+## 📚 Dataset Format
+UMI has multiple tiers of data storage formats:
+* GoPro data: Just a folder of GoPro mp4s :)
+* SLAM data: Output of ORB_SLAM3 pipeline (volatile)
+* Zarr data: A single zip file optimized for fast random read for training.
+
+### Zarr data format
+Following [Diffusion Policy](https://diffusion-policy.cs.columbia.edu/), UMI uses [Zarr](https://zarr.dev/) as the container for training datasets. Zarr is similar to [HDF5](https://docs.hdfgroup.org/hdf5/v1_14/_intro_h_d_f5.html) but offers better flexibility for storage backends, chunking, compressors and parallel access. 
+
+Conceptually, Zarr can be understood as a nested `dict` of "numpy arrays". For example, here's the structure of the `example_demo_session` dataset.
+``` python
+import zarr
+from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, JpegXl
+register_codecs()
+
+root = zarr.open('example_demo_session/dataset.zarr.zip')
+print(root.tree())
+>>>
+/
+ ├── data
+ │   ├── camera0_rgb (2315, 224, 224, 3) uint8
+ │   ├── robot0_demo_end_pose (2315, 6) float64
+ │   ├── robot0_demo_start_pose (2315, 6) float64
+ │   ├── robot0_eef_pos (2315, 3) float32
+ │   ├── robot0_eef_rot_axis_angle (2315, 3) float32
+ │   └── robot0_gripper_width (2315, 1) float32
+ └── meta
+     └── episode_ends (5,) int64
+```
+
+
+#### ReplayBuffer
+We implemented `ReplayBuffer` class for convenience of accessing zarr data.
+```python
+from diffusion_policy.common.replay_buffer import ReplayBuffer
+
+replay_buffer = ReplayBuffer.create_from_group(root)
+replay_buffer.n_episodes
+>>> 5
+
+# reading an episode
+ep = replay_buffer.get_episode(0)
+ep.keys()
+>>> dict_keys(['camera0_rgb', 'robot0_demo_end_pose', 'robot0_demo_start_pose', 'robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width'])
+
+ep['robot0_gripper_width']
+>>>
+array([[0.07733118],
+       [0.07733118],
+       [0.07734068],
+...
+       [0.08239228],
+       [0.08236252],
+       [0.0823558 ]], dtype=float32)
+```
+
+
+#### Data Group
+In `root['data']` "dict", we have a group of arrays containing demonstration episodes, concatinated along the first dimension (time/step). In this dataset, we have a total of 2315 steps across 5 episodes. In UMI, we assume data has a frame rate of 60Hz (actually, 59.94Hz), matching the recording frame rate of GoPros. All arrays in `root['data']` must have the same size in their first (time) dimension.
+
+```python
+root['data']['robot0_eef_pos']
+>>> <zarr.core.Array '/data/robot0_eef_pos' (2315, 3) float32>
+
+root['data']['robot0_eef_pos'][0]
+>>> array([ 0.1872826 , -0.35130176,  0.1859438 ], dtype=float32)
+
+root['data']['robot0_eef_pos'][:]
+>>>
+array([[ 0.1872826 , -0.35130176,  0.1859438 ],
+       [ 0.18733297, -0.3509169 ,  0.18603411],
+       [ 0.18735182, -0.3503186 ,  0.18618457],
+       ...,
+       [ 0.12694108, -0.3326249 ,  0.13230264],
+       [ 0.12649481, -0.3347473 ,  0.1347403 ],
+       [ 0.12601827, -0.33651358,  0.13699797]], dtype=float32)
+
+```
+#### Metadata Group
+How do we know the start and end of each episode? We store an integer array `root['meta']['episode_ends']` that contains the `end` index of each episode into `data` arrays. 
+For example, the first episode can be accessed with `root['data']['robot0_eef_pos'][0:468]` and the second episode can be accessed with `root['data']['robot0_eef_pos'][468:932]`.
+
+```python
+root['meta']['episode_ends'][:]
+>>> array([ 468,  932, 1302, 1710, 2315])
+```
+
+
+#### Data Array Chunking and Compression
+Note that all arrays in the dataset are of type `zarr.core.Array` instead of `numpy.ndarray`. While offerring similar API to numpy arrays, Zarr arrays are optimized for fast on-disk storage with *chunked compression*. For example, camera images `root['data']['camera0_rgb']` is stored with chunk size `(1, 224, 224, 3)` and `JpegXl` compression. When reading from a zarr array, an entire chunk of data is loaded from disk storage and de-compressed to a numpy array.
+
+For optimal performance, you want to carefully chose your chunk size. A chunk size too big means that you are de-compressing more data than necessary (e.g. chunks=(100, 224, 244, 3) will decompress and discard 99 images when accessing [0]). In contrast, having the chunk size too small will incur additional overhead and reduces compression rate (.e.g chunks=(1,14,14,3) means each image is split into 256 chunks).
+
+```python
+root['data']['camera0_rgb']
+>>> <zarr.core.Array '/data/camera0_rgb' (2315, 224, 224, 3) uint8>
+
+root['data']['camera0_rgb'].chunks # chunk size
+>>> (1, 224, 224, 3)
+
+root['data']['camera0_rgb'].nchunks # number of chunks
+>>> 2315
+
+root['data']['camera0_rgb'].compressor
+>>> JpegXl(decodingspeed=None, distance=None, effort=None, index=None, keeporientation=None, level=99, lossless=False, numthreads=1, photometric=None, planar=None, usecontainer=None)
+
+root['data']['camera0_rgb'][0]
+>>>
+array([[[ 7,  6, 15],
+        [ 7,  6, 15],
+        [ 4,  4, 13],
+        ...,
+        [ 6,  7, 15],
+        [ 4,  7, 14],
+        [ 3,  6, 13]],
+
+       ...,
+
+       [[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]]], dtype=uint8)
+```
+
+We use a rather large chunk size for low-dimisional data. Since these data are cached into numpy array inside `UmiDataset`, no read IOPS overhead is introduced.
+
+``` python
+root['data']['robot0_eef_pos'].chunks
+>>> (468, 3)
+
+root['data']['robot0_eef_pos'].compressor # uncompressed chunks
+>>> None
+```
+
+#### In-memory Compression
+During traning, streaming dataset from a network drive is often bottelnecked by [IOPS](https://en.wikipedia.org/wiki/IOPS), especially when multiple GPUs/nodes reading from the same network drive. While loading the entire dataset to memory works around IOPS bottleneck, an uncompressed UMI dataset often don't fit in RAM.
+
+We found streaming *compressed* dataset from RAM to be a good tradeoff between memory footprint and read performance.
+```python
+root.store
+>>> <zarr.storage.ZipStore at 0x76b73017d400>
+
+ram_store = zarr.MemoryStore()
+# load stored chunks in bytes directly to memory, without decompression
+zarr.convenience.copy_store(root.store, ram_store)
+ram_root = zarr.group(ram_store)
+print(ram_root.tree())
+>>>
+/
+ ├── data
+ │   ├── camera0_rgb (2315, 224, 224, 3) uint8
+ │   ├── robot0_demo_end_pose (2315, 6) float64
+ │   ├── robot0_demo_start_pose (2315, 6) float64
+ │   ├── robot0_eef_pos (2315, 3) float32
+ │   ├── robot0_eef_rot_axis_angle (2315, 3) float32
+ │   └── robot0_gripper_width (2315, 1) float32
+ └── meta
+     └── episode_ends (5,) int64
+
+
+# loading compressed data to RAM with ReplayBuffer
+ram_replay_buffer = ReplayBuffer.copy_from_store(
+    root.store,
+    zarr.MemoryStore()
+)
+ep = ram_replay_buffer.get_episode(0)
+```
+
+
 ## 🏷️ License
 This repository is released under the MIT license. See [LICENSE](LICENSE) for additional details.
 
