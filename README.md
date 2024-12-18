@@ -155,8 +155,10 @@ If everything are setup correctly, your robot should be able to rotate the cup a
 
 Known issue ⚠️: The policy doesn't work well under direct sunlight, since the dataset was collected during a rainiy week at Stanford.
 
-### Reproduce Policies on ARX X5 Robot Arms
+### 🤗 Reproducing Policies on ARX X5 Robot Arms
 Please follow [umi-on-legs](https://github.com/real-stanford/umi-on-legs) for hardware modification and [umi-arx](https://github.com/real-stanford/umi-arx) for detailed policy deployment instructions. 
+
+<img width="90%" src="assets/umi_cup_arx.gif">
 
 ## 🏷️ License
 This repository is released under the MIT license. See [LICENSE](LICENSE) for additional details.

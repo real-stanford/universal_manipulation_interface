@@ -6,7 +6,7 @@ python run_slam_pipeline.py <session_dir>
 import sys
 import os
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(__file__)
 sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 
