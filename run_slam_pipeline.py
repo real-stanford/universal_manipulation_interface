@@ -30,25 +30,30 @@ def main(session_dir, calibration_dir):
     for session in session_dir:
         session = pathlib.Path(os.path.expanduser(session)).absolute()
 
-        print("############## 00_process_videos #############")
-        script_path = script_dir.joinpath("00_process_videos.py")
-        assert script_path.is_file()
-        cmd = [
-            'python', str(script_path),
-            str(session)
-        ]
-        result = subprocess.run(cmd)
-        assert result.returncode == 0
+        # print("############## 00_process_videos #############")
+        # script_path = script_dir.joinpath("00_process_videos.py")
+        # assert script_path.is_file()
+        # cmd = [
+        #     'python', str(script_path),
+        #     str(session)
+        # ]
+        # result = subprocess.run(cmd)
+        # assert result.returncode == 0, result
 
-        print("############# 01_extract_gopro_imu ###########")
-        script_path = script_dir.joinpath("01_extract_gopro_imu.py")
-        assert script_path.is_file()
-        cmd = [
-            'python', str(script_path),
-            str(session)
-        ]
-        result = subprocess.run(cmd)
-        assert result.returncode == 0
+        # return
+
+        # print("############# 01_extract_gopro_imu ###########")
+        # script_path = script_dir.joinpath("01_extract_gopro_imu.py")
+        # print(f"{script_path=}")
+        # assert script_path.is_file()
+        # cmd = [
+        #     'python', str(script_path),
+        #     str(session)
+        # ]
+        # result = subprocess.run(cmd)
+        # assert result.returncode == 0
+
+        # return
 
         print("############# 02_create_map ###########")
         script_path = script_dir.joinpath("02_create_map.py")
@@ -64,8 +69,8 @@ def main(session_dir, calibration_dir):
                 '--map_path', str(map_path)
             ]
             result = subprocess.run(cmd)
-            assert result.returncode == 0
-            assert map_path.is_file()
+            assert result.returncode == 0, result
+            assert map_path.is_file(), result
 
         print("############# 03_batch_slam ###########")
         script_path = script_dir.joinpath("03_batch_slam.py")
