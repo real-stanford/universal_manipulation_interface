@@ -87,6 +87,8 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                 csv_path = mount_target.joinpath('camera_trajectory.csv')
                 video_path = mount_target.joinpath('raw_video.mp4')
                 json_path = mount_target.joinpath('imu_data.json')
+
+                # NOTE
                 mask_path = mount_target.joinpath('slam_mask.png')
                 mask_write_path = video_dir.joinpath('slam_mask.png')
                 
