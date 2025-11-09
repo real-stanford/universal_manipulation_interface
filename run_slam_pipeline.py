@@ -30,6 +30,18 @@ def main(session_dir, calibration_dir):
     for session in session_dir:
         session = pathlib.Path(os.path.expanduser(session)).absolute()
 
+        print("############## 000_preprocess #############")
+        script_path = script_dir.joinpath("000_preprocess.py")
+        assert script_path.is_file()
+        cmd = [
+            'python', str(script_path),
+            str(session)
+        ]
+        result = subprocess.run(cmd)
+        assert result.returncode == 0, result
+
+        return
+
         # print("############## 00_process_videos #############")
         # script_path = script_dir.joinpath("00_process_videos.py")
         # assert script_path.is_file()

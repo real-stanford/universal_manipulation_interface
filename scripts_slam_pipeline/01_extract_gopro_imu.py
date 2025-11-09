@@ -152,8 +152,8 @@ def extract_realsense_imu_to_json(bag_path: pathlib.Path, json_path: pathlib.Pat
         if accel_samples or gyro_samples:
             # 사용자 요청에 따라 평면 구조로 시리얼라이즈
             final_json_data = {
-                "ACCL_SAMPLES": accel_samples,
-                "GYRO_SAMPLES": gyro_samples
+                "ACCL": accel_samples,
+                "GYRO": gyro_samples
             }
             
             with open(json_path, 'w', encoding='utf-8') as f:
