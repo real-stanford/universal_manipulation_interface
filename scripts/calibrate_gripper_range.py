@@ -12,7 +12,7 @@ import collections
 import pickle
 import json
 import numpy as np
-from umi.common.cv_util import get_gripper_width
+from umi.common.cv_util_realsense import get_gripper_width
 
 
 # %%
@@ -20,7 +20,7 @@ from umi.common.cv_util import get_gripper_width
 @click.option('-i', '--input', required=True, help='Tag detection pkl')
 @click.option('-o', '--output', required=True, help='output json')
 @click.option('-t', '--tag_det_threshold', type=float, default=0.8)
-@click.option('-nz', '--nominal_z', type=float, default=0.072, help="nominal Z value for gripper finger tag")
+@click.option('-nz', '--nominal_z', type=float, default=0.1667, help="nominal Z value for gripper finger tag")
 def main(input, output, tag_det_threshold, nominal_z):
     tag_detection_results = pickle.load(open(input, 'rb'))
     
@@ -55,6 +55,7 @@ def main(input, output, tag_det_threshold, nominal_z):
     gripper_probs = sorted(gripper_prob_map.items(), key=lambda x:x[1])
     gripper_id = gripper_probs[-1][0]
     gripper_prob = gripper_probs[-1][1]
+
     print(f"Detected gripper id: {gripper_id} with probability {gripper_prob}")
     if gripper_prob < tag_det_threshold:
         print(f"Detection rate {gripper_prob} < {tag_det_threshold} threshold.")
@@ -67,7 +68,13 @@ def main(input, output, tag_det_threshold, nominal_z):
     gripper_widths = list()
     for i, dt in enumerate(tag_detection_results):
         tag_dict = dt['tag_dict']
-        width = get_gripper_width(tag_dict, left_id, right_id, nominal_z=nominal_z)
+        width = get_gripper_width(
+            tag_dict, 
+            left_id, 
+            right_id, 
+            nominal_z=nominal_z,
+            z_tolerance=0.001
+        )
         if width is None:
             width = float('Nan')
         gripper_widths.append(width)

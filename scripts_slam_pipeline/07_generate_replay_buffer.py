@@ -19,13 +19,12 @@ import multiprocessing
 import concurrent.futures
 from tqdm import tqdm
 from collections import defaultdict
-from umi.common.cv_util import (
-    parse_fisheye_intrinsics,
+from umi.common.cv_util_realsense import (
+    parse_realsense_intrinsics,
     FisheyeRectConverter,
     get_image_transform, 
     draw_predefined_mask,
     inpaint_tag,
-    get_mirror_crop_slices
 )
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, JpegXl
@@ -84,7 +83,6 @@ def main(input, output, out_res, out_fov, compression_level,
         if not plan_path.is_file():
             print(f"Skipping {ipath.name}: no dataset_plan.pkl")
             continue
-        
         plan = pickle.load(plan_path.open('rb'))
         
         videos_dict = defaultdict(list)
@@ -189,8 +187,9 @@ def main(input, output, out_res, out_fov, compression_level,
         if mirror_swap:
             ow, oh = out_res
             mirror_mask = np.ones((oh,ow,3),dtype=np.uint8)
-            mirror_mask = draw_predefined_mask(
-                mirror_mask, color=(0,0,0), mirror=True, gripper=False, finger=False)
+            # NOTE: no mirror in our case, so disable it
+            # mirror_mask = draw_predefined_mask(
+            #     mirror_mask, color=(0,0,0), mirror=True, gripper=False, finger=False)
             is_mirror = (mirror_mask[...,0] == 0)
         
         with av.open(mp4_path) as container:

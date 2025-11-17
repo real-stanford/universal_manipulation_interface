@@ -32,6 +32,7 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
     """
 
     # load
+    print(f"[INFO] {csv_trajectory=}")
     df = pd.read_csv(csv_trajectory)
     tag_detection_results = pickle.load(open(tag_detection, 'rb'))
 
@@ -62,6 +63,7 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
     for tum_idx, video_idx in enumerate(tum_video_idxs):
         td = tag_detection_results[video_idx]
         tag_dict = td['tag_dict']
+
         if tag_id not in tag_dict:
             continue
         
@@ -72,15 +74,20 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
 
         # filter cam pose
         dist_to_cam = np.linalg.norm(tx_cam_tag[:3,3])
-        if (dist_to_cam < 0.3) or  (dist_to_cam > 2):
+        if (dist_to_cam < 0.1) or (dist_to_cam > 2):
             continue
         
         # filter tag location in image
         corners = tag['corners']
         tag_center_pix = corners.mean(axis=0)
-        img_center = np.array([2704, 2028], dtype=np.float32) / 2
+        
+        # NOTE: fix resolution
+        # img_center = np.array([2704, 2028], dtype=np.float32) / 2
+        img_center = np.array([1920, 1080], dtype=np.float32) / 2
         dist_to_center = np.linalg.norm(tag_center_pix - img_center) / img_center[1]
-        if dist_to_center > 0.6:
+
+        # NOTE: modify dist to center
+        if dist_to_center > 0.393:
             continue
 
         tx_slam_tag = tx_slam_cam @ tx_cam_tag

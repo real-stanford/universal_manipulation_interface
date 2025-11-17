@@ -19,7 +19,11 @@ from tqdm import tqdm
 import cv2
 import av
 import numpy as np
-from umi.common.cv_util import draw_predefined_mask
+# from umi.common.cv_util import draw_predefined_mask
+from umi.common.cv_util_realsense import (
+    draw_rgb_predefined_mask,
+    RGB_IMG_SHAPE
+)
 
 
 # %%
@@ -78,12 +82,14 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
             futures = set()
             for video_dir in tqdm(input_video_dirs):
                 video_dir = video_dir.absolute()
+                print(f"[INFO] video_dir={str(video_dir)}")
                 if video_dir.joinpath('camera_trajectory.csv').is_file():
                     print(f"camera_trajectory.csv already exists, skipping {video_dir.name}")
                     continue
                 
                 # softlink won't work in bind volume
-                mount_target = pathlib.Path('/data')
+                # mount_target = pathlib.Path('/data')
+                mount_target = video_dir
                 csv_path = mount_target.joinpath('camera_trajectory.csv')
                 video_path = mount_target.joinpath('raw_video.mp4')
                 json_path = mount_target.joinpath('imu_data.json')
@@ -98,31 +104,27 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                     duration_sec = float(video.duration * video.time_base)
                 timeout = duration_sec * timeout_multiple
                 
-                slam_mask = np.zeros((2028, 2704), dtype=np.uint8)
-                slam_mask = draw_predefined_mask(
-                    slam_mask, color=255, mirror=True, gripper=False, finger=True)
+                slam_mask = np.zeros(RGB_IMG_SHAPE, dtype=np.uint8)
+                slam_mask = draw_rgb_predefined_mask(slam_mask, color=255)
                 cv2.imwrite(str(mask_write_path.absolute()), slam_mask)
 
                 map_mount_source = map_path
                 map_mount_target = pathlib.Path('/map').joinpath(map_mount_source.name)
 
+                ORB_SLAM3_ROOT = pathlib.Path("~/Desktop/study/ORB_SLAM3").expanduser()
+                binary_path = ORB_SLAM3_ROOT.joinpath("Examples/RGB-D-Inertial/realsense_slam")
+                setting_path = ORB_SLAM3_ROOT.joinpath("Examples/RGB-D-Inertial/RealSense_D435i.yaml")
+                voca_path = ORB_SLAM3_ROOT.joinpath("Vocabulary/ORBvoc.txt")
+                
                 # run SLAM
                 cmd = [
-                    'docker',
-                    'run',
-                    '--rm', # delete after finish
-                    '--volume', str(video_dir) + ':' + '/data',
-                    '--volume', str(map_mount_source.parent) + ':' + str(map_mount_target.parent),
-                    docker_image,
-                    '/ORB_SLAM3/Examples/Monocular-Inertial/gopro_slam',
-                    '--vocabulary', '/ORB_SLAM3/Vocabulary/ORBvoc.txt',
-                    '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro10_maxlens_fisheye_setting_v1_720.yaml',
-                    '--input_video', str(video_path),
-                    '--input_imu_json', str(json_path),
+                    str(binary_path),
+                    "--setting", str(setting_path), 
+                    "--vocabulary", str(voca_path),
+                    "--input_data_dir", str(video_dir),
                     '--output_trajectory_csv', str(csv_path),
-                    '--load_map', str(map_mount_target),
-                    '--mask_img', str(mask_path),
-                    '--max_lost_frames', str(max_lost_frames)
+                    '--load_map', str(map_mount_source),
+                    # '--max_lost_frames', str(max_lost_frames)
                 ]
 
                 stdout_path = video_dir.joinpath('slam_stdout.txt')

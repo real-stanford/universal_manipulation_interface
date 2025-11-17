@@ -23,7 +23,7 @@ from tqdm import tqdm
 # %%
 @click.command()
 @click.option('-i', '--input_dir', required=True, help='Directory for demos folder')
-@click.option('-ci', '--camera_intrinsics', required=True, help='Camera intrinsics json file (2.7k)')
+@click.option('-ci', '--camera_intrinsics', required=True, help='Camera intrinsics')
 @click.option('-ac', '--aruco_yaml', required=True, help='Aruco config yaml file')
 @click.option('-n', '--num_workers', type=int, default=None)
 def main(input_dir, camera_intrinsics, aruco_yaml, num_workers):
@@ -53,7 +53,7 @@ def main(input_dir, camera_intrinsics, aruco_yaml, num_workers):
 
                 # run SLAM
                 cmd = [
-                    'python', script_path,
+                    'python', str(script_path),
                     '--input', str(video_path),
                     '--output', str(pkl_path),
                     '--intrinsics_json', camera_intrinsics,
@@ -71,13 +71,14 @@ def main(input_dir, camera_intrinsics, aruco_yaml, num_workers):
                     lambda x: subprocess.run(x, 
                         capture_output=True), 
                     cmd))
+                
                 # futures.add(executor.submit(lambda x: print(' '.join(x)), cmd))
 
             completed, futures = concurrent.futures.wait(futures)            
             pbar.update(len(completed))
 
     print("Done! Result:")
-    print([x.result() for x in completed])
+    # print([x.result() for x in completed])
 
 # %%
 if __name__ == "__main__":

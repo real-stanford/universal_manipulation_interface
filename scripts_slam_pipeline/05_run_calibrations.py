@@ -42,7 +42,7 @@ def main(session_dir):
             '--tag_detection', str(tag_path),
             '--csv_trajectory', str(csv_path),
             '--output', str(slam_tag_path),
-            '--keyframe_only'
+            # '--keyframe_only'
         ]
         subprocess.run(cmd)
         
@@ -57,7 +57,8 @@ def main(session_dir):
             cmd = [
                 'python', str(script_path),
                 '--input', str(tag_path),
-                '--output', str(gripper_range_path)
+                '--output', str(gripper_range_path),
+                '--tag_det_threshold', str(0.45),
             ]
             subprocess.run(cmd)
 

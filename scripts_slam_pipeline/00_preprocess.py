@@ -93,7 +93,7 @@ def main(session_dir):
             # Move/Copy videos
             vfname = 'raw_bag.bag' # Renamed to raw_bag.bag for consistency with previous scripts
             out_video_path = this_out_dir.joinpath(vfname)
-            shutil.copy(bag_path, out_video_path)
+            shutil.move(bag_path, out_video_path)
             print(f"Copied {bag_path.name} to {out_video_path.relative_to(session)}")
 
             # Create symlink back from original location (Logic is kept but commented out)

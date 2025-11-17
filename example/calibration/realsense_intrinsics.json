@@ -1,0 +1,11 @@
+{
+    "image_height": 720,
+    "image_width": 1280,
+    "intrinsic_type": "PINHOLE",
+    "intrinsics": {
+      "fx": 914.43774414,
+      "fy": 912.53448486,
+      "principal_pt_x": 646.18066406,
+      "principal_pt_y": 369.3788147
+    }
+}  
