@@ -218,12 +218,10 @@ def pixel_coords_to_canonical(pts, img_shape=RGB_IMG_SHAPE):
 
 def get_rgb_gripper_canonical_polygon():
     left_pts = (
-        (30, 1080),
-        (160, 990),
-        (250, 990),
-        (1820, 970),
-        (1920, 1030),
-        (1920, 1080),
+        (210, 1080),
+        (360, 840),
+        (1540, 840),
+        (1730, 1080),
     )
     
     resolution = RGB_IMG_SHAPE
@@ -237,15 +235,12 @@ def get_rgb_gripper_canonical_polygon():
 
 def get_rgb_finger_canonical_polygon():
     left_pts = (
-        (250, 990),
-        (400, 900),
-        (560, 900),
-        (790, 820),
-        (1180, 820),
-        (1420, 870),
-        (1550, 870),
-        (1710, 970),
-        (1920, 1030),
+        (410, 850),
+        (510, 700),
+        (790, 580),
+        (1130, 580),
+        (1380, 700),
+        (1490, 850),
     )
     
     resolution = RGB_IMG_SHAPE
