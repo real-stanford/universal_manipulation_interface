@@ -30,6 +30,7 @@ def main(session_dir):
         script_path = script_dir.joinpath('calibrate_slam_tag.py')
         assert script_path.is_file()
         tag_path = mapping_dir.joinpath('tag_detection.pkl')
+        print("test", tag_path)
         assert tag_path.is_file()
         csv_path = mapping_dir.joinpath('camera_trajectory.csv')
         if not csv_path.is_file():
@@ -42,7 +43,7 @@ def main(session_dir):
             '--tag_detection', str(tag_path),
             '--csv_trajectory', str(csv_path),
             '--output', str(slam_tag_path),
-            # '--keyframe_only'
+            '--keyframe_only'
         ]
         subprocess.run(cmd)
         
@@ -58,7 +59,8 @@ def main(session_dir):
                 'python', str(script_path),
                 '--input', str(tag_path),
                 '--output', str(gripper_range_path),
-                '--tag_det_threshold', str(0.45),
+                '--nominal_z', str(0.287),
+                '--tag_det_threshold', str(0.7),
             ]
             subprocess.run(cmd)
 

@@ -59,8 +59,10 @@ def main(input, output, intrinsics_json, aruco_yaml, num_workers):
             frame_cts_sec = frame.pts * in_stream.time_base
             # avoid detecting tags in the mirror
 
-            # NOTE: No mirror in our case, so disable it
-            # img = draw_predefined_mask(img, color=(0,0,0), mirror=True, gripper=False, finger=False)
+            img = draw_rgb_predefined_mask(
+                img, color=(0,0,0), mirror=True, gripper=False, finger=False
+            )
+            
             tag_dict = detect_localize_aruco_tags(
                 img=img,
                 aruco_dict=aruco_dict,

@@ -10,9 +10,10 @@ import scipy.interpolate as si
 
 
 RGB_IMG_SHAPE = (1080, 1920)
+IR_IMG_SHAPE = (480, 640)
 
 
-def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=0.008):
+def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.227, z_tolerance=0.0015):
     zmax = nominal_z + z_tolerance
     zmin = nominal_z - z_tolerance
 
@@ -182,50 +183,23 @@ def detect_localize_aruco_tags(
 
 # draw
 
-def canonical_to_pixel_coords(coords, img_shape=RGB_IMG_SHAPE):
+def canonical_to_pixel_coords(coords, img_shape):
     pts = np.asarray(coords) * img_shape[0] + np.array(img_shape[::-1]) * 0.5
     return pts
 
-def pixel_coords_to_canonical(pts, img_shape=RGB_IMG_SHAPE):
+def pixel_coords_to_canonical(pts, img_shape):
     coords = (np.asarray(pts) - np.array(img_shape[::-1]) * 0.5) / img_shape[0]
     return coords
-
-# def get_rgb_canonical_polygon():
-#     left_pts = (
-#         (30, 1080),
-#         (160, 990),
-#         (250, 990),
-#         (400, 900),
-#         (560, 900),
-#         (790, 820),
-#         (1180, 820),
-#         (1420, 870),
-#         (1550, 870),
-#         (1710, 970),
-#         (1820, 970),
-#         (1920, 1030),
-#         (1920, 1080),
-#     )
-    
-#     resolution = RGB_IMG_SHAPE
-#     left_coords = pixel_coords_to_canonical(left_pts, resolution)
-#     right_coords = left_coords.copy()
-#     right_coords[:,0] *= -1
-#     # coords = np.stack([left_coords, right_coords])
-#     coords = np.stack([left_coords])
-#     return coords
-
 
 def get_rgb_gripper_canonical_polygon():
     left_pts = (
         (210, 1080),
-        (360, 840),
-        (1540, 840),
+        (360, 865),
+        (1550, 825),
         (1730, 1080),
     )
     
-    resolution = RGB_IMG_SHAPE
-    left_coords = pixel_coords_to_canonical(left_pts, resolution)
+    left_coords = pixel_coords_to_canonical(left_pts, RGB_IMG_SHAPE)
     right_coords = left_coords.copy()
     right_coords[:,0] *= -1
     # coords = np.stack([left_coords, right_coords])
@@ -235,16 +209,15 @@ def get_rgb_gripper_canonical_polygon():
 
 def get_rgb_finger_canonical_polygon():
     left_pts = (
-        (410, 850),
+        (430, 865),
         (510, 700),
         (790, 580),
         (1130, 580),
         (1380, 700),
-        (1490, 850),
+        (1490, 825),
     )
     
-    resolution = RGB_IMG_SHAPE
-    left_coords = pixel_coords_to_canonical(left_pts, resolution)
+    left_coords = pixel_coords_to_canonical(left_pts, RGB_IMG_SHAPE)
     right_coords = left_coords.copy()
     right_coords[:,0] *= -1
     # coords = np.stack([left_coords, right_coords])
@@ -260,6 +233,55 @@ def draw_rgb_predefined_mask(img, color=(0,0,0),*,mirror=True, gripper=True, fin
         all_coords.extend(get_rgb_gripper_canonical_polygon())
     if finger:
         all_coords.extend(get_rgb_finger_canonical_polygon())
+
+    for coords in all_coords:
+        pts = canonical_to_pixel_coords(coords, img.shape[:2])
+        pts = np.round(pts).astype(np.int32)
+        flag = cv2.LINE_AA if use_aa else cv2.LINE_8
+        cv2.fillPoly(img,[pts], color=color, lineType=flag)
+    return img
+
+
+def draw_im_l_infrared_mask(img, color=(0,0,0),*,mirror=True, gripper=True, finger=True, use_aa=False):
+    all_coords = list()
+
+    pts = (
+        (80, 480),
+        (80, 350),
+        (164, 280),
+        (248, 240),
+        (340, 240),
+        (420, 280),
+        (470, 346),
+        (470, 480),
+    )
+
+    coords = np.stack([pixel_coords_to_canonical(pts, IR_IMG_SHAPE)])
+    all_coords.extend(coords)
+
+    for coords in all_coords:
+        pts = canonical_to_pixel_coords(coords, img.shape[:2])
+        pts = np.round(pts).astype(np.int32)
+        flag = cv2.LINE_AA if use_aa else cv2.LINE_8
+        cv2.fillPoly(img,[pts], color=color, lineType=flag)
+    return img
+
+def draw_im_r_infrared_mask(img, color=(0,0,0),*,mirror=True, gripper=True, finger=True, use_aa=False):
+    all_coords = list()
+
+    pts = (
+        (0, 480),
+        (0, 330),
+        (90, 275),
+        (190, 240),
+        (280, 240),
+        (335, 275),
+        (360, 350),
+        (360, 480)
+    )
+
+    coords = np.stack([pixel_coords_to_canonical(pts, IR_IMG_SHAPE)])
+    all_coords.extend(coords)
 
     for coords in all_coords:
         pts = canonical_to_pixel_coords(coords, img.shape[:2])

@@ -41,8 +41,52 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
     if keyframe_only:
         is_valid &= df['is_keyframe']
 
+    # NOTE: GoPro and Realsene have different timestamp methods!!
     # convert to mat
-    cam_pose_timestamps = df['timestamp'].loc[is_valid].to_numpy()
+
+    if not df.empty and df['timestamp'].max() > 1e9:
+        valid_timestamps = df.loc[df['timestamp'] > 1e9, 'timestamp']
+        if not valid_timestamps.empty:
+            start_time = valid_timestamps.iloc[0] # 예: 1.763965e+09 (Row 1)
+            print(f"[INFO] RealSense Epoch detected. Normalizing based on Row {valid_timestamps.index[0]}: {start_time:.3f}")
+            df['timestamp'] = np.maximum(df['timestamp'] - start_time, 0)
+        else:
+            print("[WARN] Max timestamp is large, but could not find valid start time.")
+
+        cam_pose_timestamps = df['timestamp'].loc[is_valid].to_numpy()
+    else:
+        print(f"[INFO] GoPro")
+        cam_pose_timestamps = df['timestamp'].loc[is_valid].to_numpy()
+
+    # [NOTE] debug
+    print("=" * 50)
+    print(f"[Debug] Time Synchronization Check")
+    
+    # SLAM time (정규화 후)
+    slam_start = cam_pose_timestamps[0]
+    slam_end = cam_pose_timestamps[-1]
+    print(f"SLAM (CSV)  : {slam_start:.4f}s ~ {slam_end:.4f}s (Duration: {slam_end - slam_start:.2f}s)")
+    
+    # ArUco time
+    video_timestamps = np.array([x['time'] for x in tag_detection_results])
+    aruco_start = video_timestamps[0]
+    aruco_end = video_timestamps[-1]
+    print(f"ArUco (PKL) : {aruco_start:.4f}s ~ {aruco_end:.4f}s (Duration: {aruco_end - aruco_start:.2f}s)")
+    
+    # check overlapped
+    overlap_start = max(slam_start, aruco_start)
+    overlap_end = min(slam_end, aruco_end)
+    
+    if overlap_end > overlap_start:
+        print(f"✅ Overlap   : {overlap_start:.4f}s ~ {overlap_end:.4f}s")
+    else:
+        print(f"❌ NO OVERLAP detected!")
+        print(f"   Gap: {overlap_start - overlap_end:.4f}s")
+    print("=" * 50)
+    
+    ########################
+
+
     cam_pos = df[['x','y','z']].loc[is_valid].to_numpy()
     cam_rot_quat_xyzw = df[['q_x', 'q_y', 'q_z', 'q_w']].loc[is_valid].to_numpy()
     cam_rot = Rotation.from_quat(cam_rot_quat_xyzw)
@@ -60,6 +104,14 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
     # find corresponding tag detection
     all_tx_slam_tag = list()
     all_idxs = list()
+
+    tx_ir_rgb = np.array([
+            [ 0.999848,    0.0162691,   0.00619061,  0.0147473],
+            [-0.0162871,   0.999863,    0.00288201, -0.0002462],
+            [-0.00614288, -0.0029824,   0.999977,    0.0000734],
+            [ 0.0,         0.0,         0.0,         1.0      ]
+        ], dtype=np.float32)
+
     for tum_idx, video_idx in enumerate(tum_video_idxs):
         td = tag_detection_results[video_idx]
         tag_dict = td['tag_dict']
@@ -74,6 +126,7 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
 
         # filter cam pose
         dist_to_cam = np.linalg.norm(tx_cam_tag[:3,3])
+
         if (dist_to_cam < 0.1) or (dist_to_cam > 2):
             continue
         
@@ -87,10 +140,13 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
         dist_to_center = np.linalg.norm(tag_center_pix - img_center) / img_center[1]
 
         # NOTE: modify dist to center
-        if dist_to_center > 0.393:
+        # print('dist_to_cam', dist_to_cam, 'dist_to_center', dist_to_center)
+
+        if dist_to_center > 0.75:
             continue
 
-        tx_slam_tag = tx_slam_cam @ tx_cam_tag
+        tx_slam_tag = tx_slam_cam @ tx_ir_rgb @ tx_cam_tag
+        # tx_slam_tag = tx_slam_cam @ tx_cam_tag
         all_tx_slam_tag.append(tx_slam_tag)
         all_idxs.append(tum_idx)
     all_tx_slam_tag = np.array(all_tx_slam_tag)
@@ -101,6 +157,7 @@ def main(tag_detection, csv_trajectory, output, tag_id, keyframe_only):
     dists = np.linalg.norm((all_tx_slam_tag[:,:3,3] - median), axis=-1)
     threshold = np.quantile(dists, 0.9)
     is_valid = dists < threshold
+
     std = all_slam_tag_pos[is_valid].std(axis=0)
     mean = all_slam_tag_pos[is_valid].mean(axis=0)
     dists = np.linalg.norm((all_tx_slam_tag[is_valid][:,:3,3] - mean), axis=-1)

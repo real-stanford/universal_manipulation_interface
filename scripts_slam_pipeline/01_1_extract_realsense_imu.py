@@ -121,8 +121,8 @@ def extract_realsense_imu_to_json(
                 sample = {
                     "value": [],
                     "cts": cts_ms,
-                    "date": date_str,
-                    "temperature [°C]": DEFAULT_TEMP_C,
+                    "timestamp": timestamp_sec,
+                    # "temperature [°C]": DEFAULT_TEMP_C,
                 }
 
                 if "Accel" in topic:

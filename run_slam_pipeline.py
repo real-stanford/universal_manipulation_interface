@@ -48,6 +48,8 @@ def main(session_dir, calibration_dir):
         # result = subprocess.run(cmd)
         # assert result.returncode == 0, result
 
+        # return
+
         # print("############# 01_1_extract_realsense_imu ###########")
         # script_path = script_dir.joinpath("01_1_extract_realsense_imu.py")
         # print(f"{script_path=}")
@@ -64,8 +66,6 @@ def main(session_dir, calibration_dir):
         # result = subprocess.run(cmd)
         # assert result.returncode == 0
 
-        # return
-
         print("############# 02_create_map ###########")
         script_path = script_dir.joinpath("02_create_map.py")
         assert script_path.is_file()
@@ -74,7 +74,6 @@ def main(session_dir, calibration_dir):
         assert mapping_dir.is_dir()
         map_path = mapping_dir.joinpath("map_atlas.osa")
         # if not map_path.is_file():
-
         # if True:
         #     cmd = [
         #         "python",
@@ -91,19 +90,19 @@ def main(session_dir, calibration_dir):
 
         # return
 
-        print("############# 03_batch_slam ###########")
-        script_path = script_dir.joinpath("03_batch_slam.py")
-        assert script_path.is_file()
-        cmd = [
-            'python', str(script_path),
-            '--input_dir', str(demo_dir),
-            '--map_path', str(map_path),
-            '--no_docker_pull',
-        ]
-        result = subprocess.run(cmd)
-        assert result.returncode == 0
+        # print("############# 03_batch_slam ###########")
+        # script_path = script_dir.joinpath("03_batch_slam.py")
+        # assert script_path.is_file()
+        # cmd = [
+        #     'python', str(script_path),
+        #     '--input_dir', str(demo_dir),
+        #     '--map_path', str(map_path),
+        #     '--no_docker_pull',
+        # ]
+        # result = subprocess.run(cmd)
+        # assert result.returncode == 0
 
-        return
+        # return
 
         # print("############# 04_detect_aruco ###########")
         # script_path = script_dir.joinpath("04_detect_aruco.py")
@@ -139,7 +138,11 @@ def main(session_dir, calibration_dir):
         print("############# 06_generate_dataset_plan ###########")
         script_path = script_dir.joinpath("06_generate_dataset_plan.py")
         assert script_path.is_file()
-        cmd = ["python", str(script_path), "--input", str(session)]
+        cmd = [
+            "python", str(script_path), 
+            "--input", str(session),
+            "--nominal_z", str(0.287),
+        ]
         result = subprocess.run(cmd)
         assert result.returncode == 0
 

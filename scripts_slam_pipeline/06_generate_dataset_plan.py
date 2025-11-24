@@ -274,7 +274,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
         else:
             on_videos.remove(event['vid_idx'])
             on_cameras.remove(event['camera_serial'])
-        assert len(on_videos) == len(on_cameras)
+        assert len(on_videos) == len(on_cameras), f"{len(on_videos)} {len(on_cameras)}"
         
         if len(on_cameras) == n_cameras:
             # start demo episode where all cameras are recording
@@ -437,13 +437,13 @@ def main(input, output, tcp_offset, tx_slam_tag,
             
             # TODO: temporary disable this route
             print(f"[INFO] lost: {csv_df['is_lost'].sum()} not lost: {(~csv_df['is_lost']).sum()}")
-            # if csv_df['is_lost'].sum() > 10:
-            #     # drop episode if too many lost frames
-            #     # unreliable tracking
-            #     break
+            if csv_df['is_lost'].sum() > 15:
+                # drop episode if too many lost frames
+                # unreliable tracking
+                break
             
-            # if (~csv_df['is_lost']).sum() < 60:
-            #     break
+            if (~csv_df['is_lost']).sum() < 60:
+                break
 
             df = csv_df.loc[~csv_df['is_lost']]
             pose_interp = pose_interp_from_df(df, 
@@ -623,9 +623,26 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 dropped_camera_count[row['camera_serial']] += 1
                 continue            
             
+            print(f"[INFO] {str(csv_path)=}")
+            
+            
             csv_df = pd.read_csv(csv_path)
             # select aligned frames
-            df = csv_df.iloc[start_frame_idx: start_frame_idx+n_frames]
+            # df = csv_df.iloc[start_frame_idx: start_frame_idx+n_frames]
+            df = csv_df[:]
+
+            # time 1e9 -> 0
+            if not df.empty and df['timestamp'].max() > 1e9:
+                valid_timestamps = df.loc[df['timestamp'] > 1e9, 'timestamp']
+                if not valid_timestamps.empty:
+                    start_time = valid_timestamps.iloc[0] # 예: 1.763965e+09 (Row 1)
+                    print(f"[INFO] RealSense Epoch detected. Normalizing based on Row {valid_timestamps.index[0]}: {start_time:.3f}")
+                    df['timestamp'] = np.maximum(df['timestamp'] - start_time, 0)
+                else:
+                    print("[WARN] Max timestamp is large, but could not find valid start time.")
+            else:
+                print(f"[INFO] GoPro")
+
             is_tracked = (~df['is_lost']).to_numpy()
 
             # basic filtering to remove bad tracking
@@ -634,15 +651,15 @@ def main(input, output, tcp_offset, tx_slam_tag,
 
             print(f"[INFO] {n_frames_lost=} {n_frames_valid=}")
             # TODO:
-            # if n_frames_lost > 10:
-            #     print(f"Skipping {video_dir.name}, {n_frames_lost} frames are lost.")
-            #     dropped_camera_count[row['camera_serial']] += 1
-            #     continue
+            if n_frames_lost > 10:
+                print(f"Skipping {video_dir.name}, {n_frames_lost} frames are lost.")
+                dropped_camera_count[row['camera_serial']] += 1
+                continue
 
-            # if n_frames_valid < 60:
-            #     print(f"Skipping {video_dir.name}, only {n_frames_valid} frames are valid.")
-            #     dropped_camera_count[row['camera_serial']] += 1
-            #     continue
+            if n_frames_valid < 60:
+                print(f"Skipping {video_dir.name}, only {n_frames_valid} frames are valid.")
+                dropped_camera_count[row['camera_serial']] += 1
+                continue
             
             # load camera pose
             df.loc[df['is_lost'], 'q_w'] = 1
@@ -658,8 +675,6 @@ def main(input, output, tcp_offset, tx_slam_tag,
 
             # TODO: handle optinal robot cal based filtering
             is_step_valid = is_tracked.copy()
-            print(is_step_valid)
-            
 
             # get gripper data
             pkl_path = video_dir.joinpath('tag_detection.pkl')
@@ -668,14 +683,18 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 dropped_camera_count[row['camera_serial']] += 1
                 continue
 
+
+
+
             tag_detection_results = pickle.load(open(pkl_path, 'rb'))
             # select aligned frames
-            tag_detection_results = tag_detection_results[start_frame_idx: start_frame_idx+n_frames]
+            tag_detection_results: list = tag_detection_results[start_frame_idx: start_frame_idx+n_frames]
 
             # one item per frame
             video_timestamps = np.array([x['time'] for x in tag_detection_results])
 
             if len(df) != len(video_timestamps):
+                print(f"[INFO] {len(df)=} {len(video_timestamps)=}")
                 print(f"Skipping {video_dir.name}, video csv length mismatch.")
                 continue
 
@@ -701,7 +720,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
             gripper_timestamps = list()
             gripper_widths = list()
             for td in tag_detection_results:
-                # NOTE: width ?
+                # TODO: width ?
                 width = get_gripper_width(td['tag_dict'], 
                     left_id=left_id, right_id=right_id, 
                     nominal_z=nominal_z)
