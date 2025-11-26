@@ -21,9 +21,9 @@ from tqdm import tqdm
 from collections import defaultdict
 from umi.common.cv_util_realsense import (
     parse_realsense_intrinsics,
-    FisheyeRectConverter,
+    # FisheyeRectConverter,
     get_image_transform, 
-    draw_predefined_mask,
+    draw_rgb_predefined_mask,
     inpaint_tag,
 )
 from diffusion_policy.common.replay_buffer import ReplayBuffer
@@ -55,16 +55,17 @@ def main(input, output, out_res, out_fov, compression_level,
             
     fisheye_converter = None
     if out_fov is not None:
-        intr_path = pathlib.Path(os.path.expanduser(ipath)).absolute().joinpath(
-            'calibration',
-            'gopro_intrinsics_2_7k.json'
-        )
-        opencv_intr_dict = parse_fisheye_intrinsics(json.load(intr_path.open('r')))
-        fisheye_converter = FisheyeRectConverter(
-            **opencv_intr_dict,
-            out_size=out_res,
-            out_fov=out_fov
-        )
+        print("[WARNING]: not implemented yet.")
+        # intr_path = pathlib.Path(os.path.expanduser(ipath)).absolute().joinpath(
+        #     'calibration',
+        #     'gopro_intrinsics_2_7k.json'
+        # )
+        # opencv_intr_dict = parse_realsense_intrinsics(json.load(intr_path.open('r')))
+        # fisheye_converter = FisheyeRectConverter(
+        #     **opencv_intr_dict,
+        #     out_size=out_res,
+        #     out_fov=out_fov
+        # )
         
     out_replay_buffer = ReplayBuffer.create_empty_zarr(
         storage=zarr.MemoryStore())
@@ -187,9 +188,8 @@ def main(input, output, out_res, out_fov, compression_level,
         if mirror_swap:
             ow, oh = out_res
             mirror_mask = np.ones((oh,ow,3),dtype=np.uint8)
-            # NOTE: no mirror in our case, so disable it
-            # mirror_mask = draw_predefined_mask(
-            #     mirror_mask, color=(0,0,0), mirror=True, gripper=False, finger=False)
+            mirror_mask = draw_rgb_predefined_mask(
+                mirror_mask, color=(0,0,0), mirror=True, gripper=False, finger=False)
             is_mirror = (mirror_mask[...,0] == 0)
         
         with av.open(mp4_path) as container:
@@ -219,7 +219,7 @@ def main(input, output, out_res, out_fov, compression_level,
                         img = inpaint_tag(img, corners)
                         
                     # mask out gripper
-                    img = draw_predefined_mask(img, color=(0,0,0), 
+                    img = draw_rgb_predefined_mask(img, color=(0,0,0), 
                         mirror=no_mirror, gripper=True, finger=False)
                     # resize
                     if fisheye_converter is None:

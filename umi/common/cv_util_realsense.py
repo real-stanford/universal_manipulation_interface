@@ -13,7 +13,7 @@ RGB_IMG_SHAPE = (1080, 1920)
 IR_IMG_SHAPE = (480, 640)
 
 
-def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.227, z_tolerance=0.0015):
+def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.227, z_tolerance=0.002):
     zmax = nominal_z + z_tolerance
     zmin = nominal_z - z_tolerance
 
@@ -289,3 +289,51 @@ def draw_im_r_infrared_mask(img, color=(0,0,0),*,mirror=True, gripper=True, fing
         flag = cv2.LINE_AA if use_aa else cv2.LINE_8
         cv2.fillPoly(img,[pts], color=color, lineType=flag)
     return img
+
+
+def inpaint_tag(img, corners, tag_scale=1.4, n_samples=16):
+    # scale corners with respect to geometric center
+    center = np.mean(corners, axis=0)
+    scaled_corners = tag_scale * (corners - center) + center
+    
+    # sample pixels on the boundary to obtain median color
+    sample_points = si.interp1d(
+        [0,1,2,3,4], list(scaled_corners) + [scaled_corners[0]], 
+        axis=0)(np.linspace(0,4,n_samples)).astype(np.int32)
+    sample_colors = img[
+        np.clip(sample_points[:,1], 0, img.shape[0]-1), 
+        np.clip(sample_points[:,0], 0, img.shape[1]-1)
+    ]
+    median_color = np.median(sample_colors, axis=0).astype(img.dtype)
+    
+    # draw tag with median color
+    img = cv2.fillPoly(
+        img, scaled_corners[None,...].astype(np.int32), 
+        color=median_color.tolist())
+    return img
+
+
+def get_image_transform(in_res, out_res, crop_ratio:float = 1.0, bgr_to_rgb: bool=False):
+    iw, ih = in_res
+    ow, oh = out_res
+    ch = round(ih * crop_ratio)
+    cw = round(ih * crop_ratio / oh * ow)
+    interp_method = cv2.INTER_AREA
+
+    w_slice_start = (iw - cw) // 2
+    w_slice = slice(w_slice_start, w_slice_start + cw)
+    h_slice_start = (ih - ch) // 2
+    h_slice = slice(h_slice_start, h_slice_start + ch)
+    c_slice = slice(None)
+    if bgr_to_rgb:
+        c_slice = slice(None, None, -1)
+
+    def transform(img: np.ndarray):
+        assert img.shape == ((ih,iw,3))
+        # crop
+        img = img[h_slice, w_slice, c_slice]
+        # resize
+        img = cv2.resize(img, out_res, interpolation=interp_method)
+        return img
+    
+    return transform

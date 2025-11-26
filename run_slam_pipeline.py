@@ -141,7 +141,7 @@ def main(session_dir, calibration_dir):
         cmd = [
             "python", str(script_path), 
             "--input", str(session),
-            "--nominal_z", str(0.287),
+            "--nominal_z", str(0.2819),
         ]
         result = subprocess.run(cmd)
         assert result.returncode == 0
