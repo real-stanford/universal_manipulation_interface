@@ -115,14 +115,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 8
   shuffle: False
   pin_memory: True
@@ -157,7 +157,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 2000
-  num_epochs: 120
+  num_epochs: 400
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
