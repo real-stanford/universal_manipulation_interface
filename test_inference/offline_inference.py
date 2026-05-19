@@ -28,12 +28,12 @@ register_codecs()
 
 # ===== Variables =====
 
-CKPT_PATH = "data/outputs/2026.04.27/05.26.56_train_diffusion_unet_timm_umi/checkpoints/latest.ckpt"
+CKPT_PATH = "data/outputs/2026.04.27/05.26.56_train_diffusion_unet_timm_umi/checkpoints/epoch=0190-train_loss=0.012.ckpt"
 OUTPUT_DIR = "test_inference/results/grasp_cube"
 DEVICE = "cuda:0"
 BATCH_SIZE = 6
 NUM_WORKERS = 0
-MAX_BATCHES = None  # None means whole dataset; use 1 for quick test
+MAX_BATCHES = 100  # None means whole dataset; use 1 for quick test
 
 # ===== Inference Functions =====
 
@@ -102,14 +102,22 @@ def get_sample_metadata(dataset, dataset_indices):
     start_idx and end_idx are the global timestep bounds of that demo.
     before_first_grasp is computed by the sampler from gripper width.
     It is not a manually labeled field in the original dataset.
+
+    base_eef_pos and base_eef_rot_axis_angle are the absolute raw robot pose
+    at current_idx. These are the poses needed later to convert relative
+    GT/predicted action horizons back into absolute 3D trajectories.
     """
     episode_ends = np.asarray(dataset.replay_buffer.episode_ends[:])
+    replay_eef_pos = dataset.replay_buffer["robot0_eef_pos"]
+    replay_eef_rot_axis_angle = dataset.replay_buffer["robot0_eef_rot_axis_angle"]
 
     metadata = {
         "dataset_index": [],
         "episode_id": [],
         "episode_timestep": [],
         "before_first_grasp": [],
+        "base_eef_pos": [],
+        "base_eef_rot_axis_angle": [],
     }
 
     for dataset_idx in dataset_indices:
@@ -130,12 +138,23 @@ def get_sample_metadata(dataset, dataset_indices):
         # Example: current_idx=120 and start_idx=100 -> demo timestep 20.
         metadata["episode_timestep"].append(int(current_idx - start_idx))
         metadata["before_first_grasp"].append(bool(before_first_grasp))
+        metadata["base_eef_pos"].append(
+            np.asarray(replay_eef_pos[current_idx], dtype=np.float32)
+        )
+        metadata["base_eef_rot_axis_angle"].append(
+            np.asarray(replay_eef_rot_axis_angle[current_idx], dtype=np.float32)
+        )
 
     return {
         "dataset_index": np.asarray(metadata["dataset_index"], dtype=np.int64),
         "episode_id": np.asarray(metadata["episode_id"], dtype=np.int64),
         "episode_timestep": np.asarray(metadata["episode_timestep"], dtype=np.int64),
         "before_first_grasp": np.asarray(metadata["before_first_grasp"], dtype=bool),
+        "base_eef_pos": np.stack(metadata["base_eef_pos"], axis=0),
+        "base_eef_rot_axis_angle": np.stack(
+            metadata["base_eef_rot_axis_angle"],
+            axis=0,
+        ),
     }
 
 def run_inference(policy, dataset, dataloader, device, max_batches=None):
@@ -152,6 +171,8 @@ def run_inference(policy, dataset, dataloader, device, max_batches=None):
         "episode_id": [],
         "episode_timestep": [],
         "before_first_grasp": [],
+        "base_eef_pos": [],
+        "base_eef_rot_axis_angle": [],
     }
 
     # Because the dataloader uses shuffle=False, batches arrive in dataset order.
@@ -214,6 +235,7 @@ def save_results(output_dir, pred, gt, sample_metadata, cfg):
         "pred_shape": list(pred.shape),
         "gt_shape": list(gt.shape),
         "action_horizon": int(cfg.task.shape_meta.action.horizon),
+        "action_down_sample_steps": int(cfg.task.shape_meta.action.down_sample_steps),
         "sample_metadata_keys": list(sample_metadata.keys()),
         "num_unique_episodes": int(np.unique(sample_metadata["episode_id"]).size),
         "episode_ids": [
