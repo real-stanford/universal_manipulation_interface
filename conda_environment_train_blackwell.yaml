@@ -1,4 +1,4 @@
-name: umi-blackwell-train
+name: blackwell-train
 channels:
   - conda-forge
 dependencies:
@@ -15,12 +15,22 @@ dependencies:
   - wandb=0.15.8
   - dill=0.3.7
   - einops=0.6.1
-  - diffusers=0.18.2
   - python-lmdb=1.4
-  - timm=0.9.7
-  - accelerate=0.24
-  - imagecodecs=2023.9.18
   - threadpoolctl=3.2
   - filelock
-  - huggingface_hub=0.25.2
   - protobuf=4.25
+  - click
+  - matplotlib
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cu128
+    - protobuf==4.25.8
+    - torch==2.7.0+cu128
+    - torchvision==0.22.0+cu128
+    - torchaudio==2.7.0+cu128
+    - timm==0.9.7
+    - diffusers==0.18.2
+    - accelerate==0.24.1
+    - huggingface_hub==0.25.2
+    - imagecodecs==2023.9.18
+    - av==17.0.1
+    - opencv-python-headless==4.10.0.84

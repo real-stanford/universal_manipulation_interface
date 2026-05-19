@@ -24,6 +24,7 @@ dependencies:
   - numcodecs=0.11
   - hydra-core=1.2.0
   - wandb=0.15.8
+  - protobuf=4.25
   - dill=0.3.7
   - einops=0.6.1
   - diffusers=0.18.2
@@ -41,6 +42,7 @@ dependencies:
   - aiohttp=3.9
   - aiofiles=23.2
   - pip:
+    - protobuf==4.25.8
     - ray[default]==2.8.0
     - threadpoolctl==3.2
     - v4l2py==2.2
