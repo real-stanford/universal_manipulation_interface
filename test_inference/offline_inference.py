@@ -138,6 +138,12 @@ def get_sample_metadata(dataset, dataset_indices):
         # Example: current_idx=120 and start_idx=100 -> demo timestep 20.
         metadata["episode_timestep"].append(int(current_idx - start_idx))
         metadata["before_first_grasp"].append(bool(before_first_grasp))
+        
+        # ABSOLUTE CURRENT EEF POSE ANCHOR FOR 3D PLOTS:
+        # These values are not predicted and not relative. They are copied
+        # directly from the replay buffer at current_idx. The notebook later
+        # uses this as base_pose_mat in:
+        #     absolute_future_pose = base_pose_mat @ relative_action_pose
         metadata["base_eef_pos"].append(
             np.asarray(replay_eef_pos[current_idx], dtype=np.float32)
         )

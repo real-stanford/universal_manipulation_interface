@@ -43,6 +43,7 @@ class UmiDataset(BaseDataset):
         self.obs_pose_repr = self.pose_repr.get('obs_pose_repr', 'rel')
         self.action_pose_repr = self.pose_repr.get('action_pose_repr', 'rel')
         
+        # Replay buffer loading with caching mechanism
         if cache_dir is None:
             # load into memory store
             with zarr.ZipStore(dataset_path, mode='r') as zip_store:
