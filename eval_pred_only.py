@@ -279,7 +279,6 @@ def main(input, output, robot_config,
             while True:
                 # ========= human control loop ==========
                 print("Human in control!")
-                policy.reset()
                 robot_states = env.get_robot_state()
                 target_pose = np.stack([rs['TargetTCPPose'] for rs in robot_states])
 
@@ -287,7 +286,6 @@ def main(input, output, robot_config,
                 gripper_target_pos = np.asarray([gs['gripper_position'] for gs in gripper_states])
                 
                 control_robot_idx_list = [0]
-                human_episode_start_pose = None
 
                 t_start = time.monotonic()
                 iter_idx = 0
@@ -299,87 +297,6 @@ def main(input, output, robot_config,
 
                     # pump obs
                     obs = env.get_obs()
-                    obs_timestamps = obs['timestamp']
-
-                    if human_episode_start_pose is None:
-                        human_episode_start_pose = list()
-                        for robot_id in range(len(robots_config)):
-                            pose = np.concatenate([
-                                obs[f'robot{robot_id}_eef_pos'],
-                                obs[f'robot{robot_id}_eef_rot_axis_angle']
-                            ], axis=-1)[-1]
-                            human_episode_start_pose.append(pose)
-
-                    # ===== Prediction-only logging: human teleop phase =====
-                    # This uses the same live input -> model prediction path as policy mode.
-                    # The robot is still in human control here; the prediction is only logged.
-                    # Vector layout for current_pose and full_horizon_prediction:
-                    # [x, y, z, rx, ry, rz, gripper_width]
-                    # x/y/z are meters, rx/ry/rz are axis-angle rotation, gripper_width is meters.
-                    with torch.no_grad():
-                        s = time.time()
-                        obs_dict_np = get_real_umi_obs_dict(
-                            env_obs=obs, shape_meta=cfg.task.shape_meta, 
-                            obs_pose_repr=obs_pose_rep,
-                            tx_robot1_robot0=tx_robot1_robot0,
-                            episode_start_pose=human_episode_start_pose)
-                        obs_dict = dict_apply(obs_dict_np, 
-                            lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
-                        result = policy.predict_action(obs_dict)
-                        raw_action = result['action_pred'][0].detach().to('cpu').numpy()
-                        human_full_horizon_prediction = get_real_umi_action(raw_action, obs, action_pose_repr)
-                        human_inference_latency = time.time() - s
-
-                    human_target_poses = human_full_horizon_prediction.copy()
-                    assert human_target_poses.shape[1] == len(robots_config) * 7
-                    for target_pose in human_target_poses:
-                        for robot_idx in range(len(robots_config)):
-                            solve_table_collision(
-                                ee_pose=target_pose[robot_idx * 7: robot_idx * 7 + 6],
-                                gripper_width=target_pose[robot_idx * 7 + 6],
-                                height_threshold=robots_config[robot_idx]['height_threshold']
-                            )
-                        solve_sphere_collision(
-                            ee_poses=target_pose.reshape([len(robots_config), -1]),
-                            robots_config=robots_config
-                        )
-
-                    human_action_timestamps = (
-                        np.arange(len(human_full_horizon_prediction), dtype=np.float64)
-                    ) * dt + obs_timestamps[-1]
-                    human_is_new = human_action_timestamps > (time.time() + 0.01)
-                    human_num_actions_that_would_execute = max(1, int(np.sum(human_is_new)))
-
-                    human_current_pose = list()
-                    for robot_idx in range(len(robots_config)):
-                        human_current_pose.append(np.concatenate([
-                            obs[f'robot{robot_idx}_eef_pos'][-1],
-                            obs[f'robot{robot_idx}_eef_rot_axis_angle'][-1],
-                            obs[f'robot{robot_idx}_gripper_width'][-1],
-                        ], axis=-1))
-                    human_current_pose = np.asarray(human_current_pose)
-
-                    human_log_record = {
-                        "phase": "human_teleop",
-                        "log_idx": int(pred_log_idx),
-                        "current_pose": human_current_pose.tolist(),
-                        "full_horizon_prediction": human_full_horizon_prediction.tolist(),
-                        "num_actions_executed": 0,
-                        "num_actions_that_would_execute": human_num_actions_that_would_execute,
-                    }
-                    with open(pred_log_path, "a") as f:
-                        f.write(json.dumps(human_log_record) + "\n")
-
-                    print("[pred-only human_teleop]")
-                    print("current_pose:")
-                    print(np.round(human_current_pose, 4))
-                    print("full_horizon_prediction:")
-                    print(np.round(human_full_horizon_prediction, 4))
-                    print("num_actions_executed:", 0)
-                    print("num_actions_that_would_execute:", human_num_actions_that_would_execute)
-                    print("inference_latency:", human_inference_latency)
-                    pred_log_idx += 1
-                    # ===== End prediction-only logging: human teleop phase =====
 
                     # visualize
                     episode_id = env.replay_buffer.n_episodes

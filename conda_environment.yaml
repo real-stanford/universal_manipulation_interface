@@ -55,7 +55,7 @@ dependencies:
     - imagecodecs==2023.9.18
     - robomimic==0.2.0
     # requires mujoco py dependencies libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf
-    - free-mujoco-py==2.1.6
-    - robosuite @ https://github.com/cheng-chi/robosuite/archive/3f2c3116f1c0a1916e94bfa28da4d055927d1ab3.tar.gz
+    # - free-mujoco-py==2.1.6
+    # - robosuite @ https://github.com/cheng-chi/robosuite/archive/3f2c3116f1c0a1916e94bfa28da4d055927d1ab3.tar.gz
     # implicitly depend on conda package exiftool
     - PyExifTool==0.5
