@@ -10,6 +10,7 @@ outputs
 wandb
 **/.DS_Store
 *.lprof
+./checkpoints
 
 # Training specific data
 latest.ckpt
