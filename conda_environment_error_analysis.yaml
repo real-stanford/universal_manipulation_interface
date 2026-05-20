@@ -1,0 +1,13 @@
+name: umi-error-analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy=1.24
+  - scipy=1.11
+  - matplotlib=3.7
+  - vedo
+  - ipykernel=6.23
+  - jupyterlab
+  - notebook
