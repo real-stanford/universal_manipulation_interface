@@ -1,0 +1,20 @@
+{
+  "dataset_path": "data_workspace/grasp_cube/dataset.zarr.zip",
+  "action_horizon": 16,
+  "action_down_sample_steps": 3,
+  "num_rollout_steps": 7,
+  "result_keys": [
+    "episode_id",
+    "input_timestep",
+    "matched_timestep",
+    "used_horizon_index",
+    "raw_action_horizon",
+    "abs_action_horizon",
+    "pred_eef_pos",
+    "pred_eef_rot_axis_angle",
+    "pred_gripper_width",
+    "gt_eef_pos",
+    "gt_eef_rot_axis_angle",
+    "gt_gripper_width"
+  ]
+}
