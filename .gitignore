@@ -10,6 +10,12 @@ outputs
 wandb
 **/.DS_Store
 *.lprof
+./checkpoints
+
+# Training specific data
+latest.ckpt
+cup_wild_vit_l_1img.ckpt
+grasp_cube_data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
