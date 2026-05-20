@@ -1,0 +1,29 @@
+{
+  "dataset_path": "data_workspace/grasp_cube/dataset.zarr.zip",
+  "pred_shape": [
+    600,
+    16,
+    10
+  ],
+  "gt_shape": [
+    600,
+    16,
+    10
+  ],
+  "action_horizon": 16,
+  "action_down_sample_steps": 3,
+  "sample_metadata_keys": [
+    "dataset_index",
+    "episode_id",
+    "episode_timestep",
+    "before_first_grasp",
+    "base_eef_pos",
+    "base_eef_rot_axis_angle"
+  ],
+  "num_unique_episodes": 3,
+  "episode_ids": [
+    0,
+    1,
+    2
+  ]
+}
