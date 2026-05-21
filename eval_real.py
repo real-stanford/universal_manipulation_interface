@@ -457,7 +457,7 @@ def main(input, output, robot_config,
                     print("Started!")
                     iter_idx = 0
                     perv_target_pose = None
-                    while True:
+                    for _i in range(1):
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
 

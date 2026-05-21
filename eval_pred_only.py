@@ -465,7 +465,7 @@ def main(input, output, robot_config,
                     print("Started!")
                     iter_idx = 0
                     perv_target_pose = None
-                    while True:
+                    for _i in range(1):
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
 
@@ -573,12 +573,12 @@ def main(input, output, robot_config,
                         # ===== End prediction-only logging =====
 
                         # execute actions
-                        # env.exec_actions(
-                        #     actions=this_target_poses,
-                        #     timestamps=action_timestamps,
-                        #     compensate_latency=True
-                        # )
-                        # print(f"Submitted {len(this_target_poses)} steps of actions.")
+                        env.exec_actions(
+                            actions=this_target_poses,
+                            timestamps=action_timestamps,
+                            compensate_latency=True
+                        )
+                        print(f"Submitted {len(this_target_poses)} steps of actions.")
 
                         # visualize
                         episode_id = env.replay_buffer.n_episodes
