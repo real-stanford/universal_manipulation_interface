@@ -1,7 +1,6 @@
-from typing import Optional, Union
-
 from diffusers.optimization import (
-    SchedulerType, Optimizer, TYPE_TO_SCHEDULER_FUNCTION
+    Union, SchedulerType, Optional,
+    Optimizer, TYPE_TO_SCHEDULER_FUNCTION
 )
 
 def get_scheduler(
