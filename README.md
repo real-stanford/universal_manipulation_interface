@@ -164,7 +164,7 @@ Please follow [umi-on-legs](https://github.com/real-stanford/umi-on-legs) for ha
 This repository is released under the MIT license. See [LICENSE](LICENSE) for additional details.
 
 ## 🙏 Acknowledgement
-* Our GoPro SLAM pipeline is adapted from [Steffen Urban](https://github.com/urbste)'s [fork](https://github.com/urbste/ORB_SLAM3) of [OBR_SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3).
+* Our GoPro SLAM pipeline is adapted from [Steffen Urban](https://github.com/urbste)'s [fork](https://github.com/urbste/ORB_SLAM3) of [ORB_SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3).
 * We used [Steffen Urban](https://github.com/urbste)'s [OpenImuCameraCalibrator](https://github.com/urbste/OpenImuCameraCalibrator/) for camera and IMU calibration.
 * The UMI gripper's core mechanism is adpated from [Push/Pull Gripper](https://www.thingiverse.com/thing:2204113) by [John Mulac](https://www.thingiverse.com/3dprintingworld/designs).
 * UMI's soft finger is adapted from [Alex Alspach](http://alexalspach.com/)'s original design at TRI.
