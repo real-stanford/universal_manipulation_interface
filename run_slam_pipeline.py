@@ -19,13 +19,17 @@ import subprocess
 @click.command()
 @click.argument('session_dir', nargs=-1)
 @click.option('-c', '--calibration_dir', type=str, default=None)
-def main(session_dir, calibration_dir):
+@click.option('-s', '--slam_setting', type=str, default=None, help='ORB_SLAM3 setting yaml, default in 02_create_map.py')
+@click.option('-m', '--slam_mask', type=str, default=None, help='SLAM mask png, default predefined UMI gripper mask')
+def main(session_dir, calibration_dir, slam_setting, slam_mask):
     script_dir = pathlib.Path(__file__).parent.joinpath('scripts_slam_pipeline')
     if calibration_dir is None:
         calibration_dir = pathlib.Path(__file__).parent.joinpath('example', 'calibration')
     else:
         calibration_dir = pathlib.Path(calibration_dir)
     assert calibration_dir.is_dir()
+    # optional, default UMI gripper convention
+    gripper_config = calibration_dir.joinpath('gripper_config.yaml')
 
     for session in session_dir:
         session = pathlib.Path(os.path.expanduser(session)).absolute()
@@ -63,6 +67,10 @@ def main(session_dir, calibration_dir):
                 '--input_dir', str(mapping_dir),
                 '--map_path', str(map_path)
             ]
+            if slam_setting is not None:
+                cmd += ['--setting', slam_setting]
+            if slam_mask is not None:
+                cmd += ['--mask', slam_mask]
             result = subprocess.run(cmd)
             assert result.returncode == 0
             assert map_path.is_file()
@@ -75,6 +83,10 @@ def main(session_dir, calibration_dir):
             '--input_dir', str(demo_dir),
             '--map_path', str(map_path)
         ]
+        if slam_setting is not None:
+            cmd += ['--setting', slam_setting]
+        if slam_mask is not None:
+            cmd += ['--mask', slam_mask]
         result = subprocess.run(cmd)
         assert result.returncode == 0
 
@@ -102,6 +114,8 @@ def main(session_dir, calibration_dir):
             'python', str(script_path),
             str(session)
         ]
+        if gripper_config.is_file():
+            cmd += ['--gripper_config', str(gripper_config)]
         result = subprocess.run(cmd)
         assert result.returncode == 0
 
@@ -112,6 +126,8 @@ def main(session_dir, calibration_dir):
             'python', str(script_path),
             '--input', str(session)
         ]
+        if gripper_config.is_file():
+            cmd += ['--gripper_config', str(gripper_config)]
         result = subprocess.run(cmd)
         assert result.returncode == 0
 

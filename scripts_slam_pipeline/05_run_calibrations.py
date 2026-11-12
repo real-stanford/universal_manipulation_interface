@@ -13,11 +13,15 @@ os.chdir(ROOT_DIR)
 import pathlib
 import click
 import subprocess
+from exiftool import ExifToolHelper
+from umi.common.gripper_config_util import load_gripper_config
 
 # %%
 @click.command()
 @click.argument('session_dir', nargs=-1)
-def main(session_dir):
+@click.option('-gc', '--gripper_config', default=None, help='Gripper config yaml, default UMI finger tag convention')
+def main(session_dir, gripper_config):
+    gripper_config = load_gripper_config(gripper_config)
     script_dir = pathlib.Path(__file__).parent.parent.joinpath('scripts')
     
     for session in session_dir:
@@ -59,6 +63,21 @@ def main(session_dir):
                 '--input', str(tag_path),
                 '--output', str(gripper_range_path)
             ]
+            if gripper_config is not None:
+                with ExifToolHelper() as et:
+                    meta = list(et.get_metadata(str(gripper_dir.joinpath('raw_video.mp4'))))[0]
+                cam_serial = meta['QuickTime:CameraSerialNumber']
+                if cam_serial not in gripper_config['grippers']:
+                    print(f"Skipping {gripper_dir.name}, camera {cam_serial} not in gripper config")
+                    continue
+                gripper = gripper_config['grippers'][cam_serial]
+                cmd += [
+                    '--gripper_id', str(gripper['gripper_id']),
+                    '--left_id', str(gripper['left_finger_tag_id']),
+                    '--right_id', str(gripper['right_finger_tag_id'])
+                ]
+                if 'nominal_z' in gripper_config:
+                    cmd += ['--nominal_z', str(gripper_config['nominal_z'])]
             subprocess.run(cmd)
 
             

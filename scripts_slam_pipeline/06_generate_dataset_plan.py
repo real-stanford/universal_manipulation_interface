@@ -26,6 +26,7 @@ from tqdm import tqdm
 import av
 from exiftool import ExifToolHelper
 from umi.common.timecode_util import mp4_get_start_datetime
+from umi.common.gripper_config_util import load_gripper_config
 from umi.common.pose_util import pose_to_mat, mat_to_pose
 from umi.common.cv_util import (
     get_gripper_width
@@ -87,14 +88,16 @@ def get_x_projection(tx_tag_this, tx_tag_other):
 @click.option('-nz', '--nominal_z', type=float, default=0.072, help="nominal Z value for gripper finger tag")
 @click.option('-ml', '--min_episode_length', type=int, default=24)
 @click.option('--ignore_cameras', type=str, default=None, help="comma separated string of camera serials to ignore")
+@click.option('-gc', '--gripper_config', default=None, help="Gripper config yaml, overrides finger tag convention, nominal_z and camera geometry")
 def main(input, output, tcp_offset, tx_slam_tag,
-         nominal_z, min_episode_length, ignore_cameras):
+         nominal_z, min_episode_length, ignore_cameras, gripper_config):
     # %% stage 0
     # gather inputs
     input_path = pathlib.Path(os.path.expanduser(input)).absolute()
     demos_dir = input_path.joinpath('demos')
     if output is None:
         output = input_path.joinpath('dataset_plan.pkl')
+    gripper_config = load_gripper_config(gripper_config)
 
     # tcp to camera transform
     # all unit in meters
@@ -102,6 +105,10 @@ def main(input, output, tcp_offset, tx_slam_tag,
     cam_to_center_height = 0.086 # constant for UMI
     # optical center to mounting screw, positive is when optical center is in front of the mount
     cam_to_mount_offset = 0.01465 # constant for GoPro Hero 9,10,11
+    if gripper_config is not None:
+        nominal_z = gripper_config.get('nominal_z', nominal_z)
+        cam_to_center_height = gripper_config.get('cam_to_center_height', cam_to_center_height)
+        cam_to_mount_offset = gripper_config.get('cam_to_mount_offset', cam_to_mount_offset)
     cam_to_tip_offset = cam_to_mount_offset + tcp_offset
 
     pose_cam_tcp = np.array([0, cam_to_center_height, cam_to_tip_offset, 0,0,0])
@@ -287,6 +294,14 @@ def main(input, output, tcp_offset, tx_slam_tag,
     vid_idx_gripper_hardware_id_map = dict()
     cam_serial_gripper_ids_map = collections.defaultdict(list)
     for vid_idx, row in video_meta_df.iterrows():
+        if gripper_config is not None:
+            # gripper hardware by camera serial
+            gripper = gripper_config['grippers'].get(row['camera_serial'])
+            gripper_id = -1 if gripper is None else gripper['gripper_id']
+            cam_serial_gripper_ids_map[row['camera_serial']].append(gripper_id)
+            vid_idx_gripper_hardware_id_map[vid_idx] = gripper_id
+            continue
+
         video_dir = row['video_dir']
         pkl_path = video_dir.joinpath('tag_detection.pkl')
         if not pkl_path.is_file():
@@ -656,6 +671,10 @@ def main(input, output, tcp_offset, tx_slam_tag,
             
             left_id = 6 * ghi
             right_id = left_id + 1
+            if gripper_config is not None:
+                gripper = gripper_config['grippers'][row['camera_serial']]
+                left_id = gripper['left_finger_tag_id']
+                right_id = gripper['right_finger_tag_id']
 
             gripper_cal_interp = None
             if ghi in gripper_id_gripper_cal_map:

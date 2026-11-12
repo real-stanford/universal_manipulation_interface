@@ -16,14 +16,10 @@ from umi.common.cv_util import get_gripper_width
 
 
 # %%
-@click.command()
-@click.option('-i', '--input', required=True, help='Tag detection pkl')
-@click.option('-o', '--output', required=True, help='output json')
-@click.option('-t', '--tag_det_threshold', type=float, default=0.8)
-@click.option('-nz', '--nominal_z', type=float, default=0.072, help="nominal Z value for gripper finger tag")
-def main(input, output, tag_det_threshold, nominal_z):
-    tag_detection_results = pickle.load(open(input, 'rb'))
-    
+def identify_gripper(tag_detection_results, tag_det_threshold):
+    """
+    Default UMI convention: gripper g uses finger tags 6g (left) and 6g+1 (right).
+    """
     # identify gripper hardware id
     n_frames = len(tag_detection_results)
     tag_counts = collections.defaultdict(lambda: 0)
@@ -60,10 +56,29 @@ def main(input, output, tag_det_threshold, nominal_z):
         print(f"Detection rate {gripper_prob} < {tag_det_threshold} threshold.")
         exit(1)
         
-    # run calibration
     left_id = gripper_id * tag_per_gripper
     right_id = left_id + 1
+    return gripper_id, left_id, right_id
 
+# %%
+@click.command()
+@click.option('-i', '--input', required=True, help='Tag detection pkl')
+@click.option('-o', '--output', required=True, help='output json')
+@click.option('-t', '--tag_det_threshold', type=float, default=0.8)
+@click.option('-nz', '--nominal_z', type=float, default=0.072, help="nominal Z value for gripper finger tag")
+@click.option('-g', '--gripper_id', type=int, default=None, help="Known gripper id, skips identification by tag ids")
+@click.option('-l', '--left_id', type=int, default=None, help="Finger tag id on image left, with --gripper_id")
+@click.option('-r', '--right_id', type=int, default=None, help="Finger tag id on image right, with --gripper_id")
+def main(input, output, tag_det_threshold, nominal_z, gripper_id, left_id, right_id):
+    tag_detection_results = pickle.load(open(input, 'rb'))
+    if gripper_id is None:
+        gripper_id, left_id, right_id = identify_gripper(
+            tag_detection_results, tag_det_threshold)
+    else:
+        assert (left_id is not None) and (right_id is not None)
+    print(f"Gripper id {gripper_id}, finger tags left {left_id} right {right_id}")
+
+    # run calibration
     gripper_widths = list()
     for i, dt in enumerate(tag_detection_results):
         tag_dict = dt['tag_dict']
@@ -72,6 +87,7 @@ def main(input, output, tag_det_threshold, nominal_z):
             width = float('Nan')
         gripper_widths.append(width)
     gripper_widths = np.array(gripper_widths)
+    print(f"Gripper width measured in {np.isfinite(gripper_widths).mean() * 100:.1f}% of frames")
     max_width = np.nanmax(gripper_widths)
     min_width = np.nanmin(gripper_widths)
 
