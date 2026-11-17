@@ -19,7 +19,7 @@ import numpy as np
 import gtsam
 from umi.tag_tracking.camera_model import FisheyeCamera
 from umi.tag_tracking.tag_detection import get_tag_object_points
-from umi.tag_tracking.noise_model import TagNoiseModel, single_tag_view
+from umi.tag_tracking.noise_model import TagNoiseModel, single_tag_view, is_usable_view
 from umi.tag_tracking.factors import (
     make_tag_factor,
     get_corner_noise_model,
@@ -54,6 +54,9 @@ def get_observations(camera: FisheyeCamera, frames: List[dict], tag_ids, tag_siz
         for tag_id, corners in frame['corners'].items():
             if (tag_id in tag_ids) and (tag_id in noise_model.tag_scales):
                 sse, view_cosine = single_tag_view(camera, corners, tag_sizes[tag_id])
+                if not is_usable_view(sse, view_cosine):
+                    # single-tag fit failed (e.g. fisheye image edge): no usable sigma
+                    continue
                 obs[tag_id] = {
                     'corners': corners,
                     'sigma': noise_model.sigma(tag_id, view_cosine),

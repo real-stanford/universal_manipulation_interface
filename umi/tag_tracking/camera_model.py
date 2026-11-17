@@ -12,6 +12,8 @@ class FisheyeCamera:
     Both implement the same projection model.
     """
     def __init__(self, intrinsics_json: str):
+        # kept so worker processes can rebuild the camera (gtsam objects are not picklable)
+        self.intrinsics_json = intrinsics_json
         intr = parse_fisheye_intrinsics(json.load(open(intrinsics_json, 'r')))
         self.image_size = tuple(int(x) for x in intr['DIM'])
         self.K = intr['K']

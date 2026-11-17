@@ -85,11 +85,14 @@ def make_tag_factor(
         measured: np.ndarray,
         calibration: gtsam.Cal3Fisheye,
         noise_model,
-        corner_motions: Optional[List[gtsam.Pose3]] = None) -> gtsam.CustomFactor:
+        corner_motions: Optional[List[gtsam.Pose3]] = None,
+        camera_offset: Optional[gtsam.Pose3] = None) -> gtsam.CustomFactor:
     """
     Tag corner projection factor (TagSLAM, Pfrommer & Daniilidis 2019).
     Each pose is either a variable key (int) or a known gtsam.Pose3.
     corner_motions: rolling shutter motion per corner, see tag_corner_residual.
+    camera_offset: known transform composed onto the first pose, the camera
+        pose is T_ref_cam * camera_offset (e.g. IMU pose * T_imu_cam).
     """
     poses = [T_ref_cam, T_ref_body, T_body_tag]
     is_key = [not isinstance(x, gtsam.Pose3) for x in poses]
@@ -98,11 +101,16 @@ def make_tag_factor(
 
     def error_func(this: gtsam.CustomFactor, values: gtsam.Values, H):
         current = [values.atPose3(x) if k else x for x, k in zip(poses, is_key)]
+        H_offset = np.eye(6)
+        if camera_offset is not None:
+            H_offset = np.zeros((6, 6), order='F')
+            current[0] = current[0].compose(camera_offset, H_offset, np.zeros((6, 6), order='F'))
         if H is None:
             return tag_corner_residual(*current, object_points, measured, calibration,
                 corner_motions=corner_motions)
         residual, J = tag_corner_residual(*current, object_points, measured,
             calibration, compute_jacobians=True, corner_motions=corner_motions)
+        J[0] = J[0] @ H_offset
         for i, Ji in enumerate([J[j] for j in range(3) if is_key[j]]):
             H[i] = Ji
         return residual

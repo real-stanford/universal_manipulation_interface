@@ -1,9 +1,8 @@
 from typing import Dict, Optional, Set
 import os
-import av
 import cv2
 import numpy as np
-from tqdm import tqdm
+from umi.common.video_chunk_util import process_video_chunked
 
 
 def get_tag_object_points(tag_size: float) -> np.ndarray:
@@ -47,27 +46,34 @@ def detect_tag_corners(
     return result
 
 
+def make_corner_detector(dict_bytes: np.ndarray, marker_size: int, max_correction_bits: int,
+        tag_ids: Optional[Set[int]]):
+    """
+    Per frame corner detector, built in each worker process
+    (cv2.aruco.Dictionary is not picklable, it is rebuilt from its parts).
+    """
+    cv2.setNumThreads(1)
+    aruco_dict = cv2.aruco.Dictionary(dict_bytes, marker_size, max_correction_bits)
+
+    def detect(frame, time):
+        return {'time': time, 'corners': detect_tag_corners(frame.to_ndarray(format='gray'), aruco_dict, tag_ids)}
+    return detect
+
+
 def detect_video_tag_corners(
         video_path: str,
         aruco_dict: cv2.aruco.Dictionary,
         tag_ids: Optional[Set[int]] = None,
-        num_threads: int = 1
+        num_workers: Optional[int] = None
         ) -> list:
     """
     Tag corners for every frame of a video, on raw decoded frames
     (no rotation metadata applied, matching the camera calibration).
+    Frames are processed in parallel time chunks on num_workers processes,
+    default all cores (umi.common.video_chunk_util).
+    Returns per frame {'frame_idx', 'time', 'corners'}.
     """
-    cv2.setNumThreads(num_threads)
-    results = list()
-    with av.open(os.path.expanduser(video_path)) as container:
-        stream = container.streams.video[0]
-        stream.thread_type = 'AUTO'
-        for i, frame in tqdm(enumerate(container.decode(stream)), total=stream.frames,
-                desc=os.path.basename(os.path.dirname(video_path)), leave=False):
-            img = frame.to_ndarray(format='gray')
-            results.append({
-                'frame_idx': i,
-                'time': float(frame.pts * stream.time_base),
-                'corners': detect_tag_corners(img, aruco_dict, tag_ids)
-            })
-    return results
+    video_path = os.path.expanduser(video_path)
+    return process_video_chunked(video_path, make_corner_detector,
+        (aruco_dict.bytesList, aruco_dict.markerSize, aruco_dict.maxCorrectionBits, tag_ids),
+        num_workers=num_workers, desc=os.path.basename(os.path.dirname(os.path.abspath(video_path))))

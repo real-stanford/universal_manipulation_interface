@@ -25,10 +25,19 @@ CHI2_2_MEDIAN = scipy.stats.chi2.median(8 - 6)
 def single_tag_view(camera: FisheyeCamera, corners: np.ndarray, tag_size: float):
     """
     Best single-tag fit: (SSE px^2, cosine of viewing angle).
+    Not finite if the fit fails, e.g. corners at the fisheye image edge
+    where the lens model is invalid; see is_usable_view.
     """
     T_cam_tag, sse = tag_pose_candidates(camera, corners, tag_size)[0]
     ray = T_cam_tag[:3, 3] / np.linalg.norm(T_cam_tag[:3, 3])
     return sse, float(abs(ray @ T_cam_tag[:3, 2]))
+
+
+def is_usable_view(sse: float, view_cosine: float) -> bool:
+    """
+    Single-tag fit usable for the noise model and as an observation.
+    """
+    return bool(np.isfinite(sse) and np.isfinite(view_cosine) and sse > 0 and view_cosine > 0)
 
 
 class TagNoiseModel:
@@ -43,6 +52,20 @@ class TagNoiseModel:
             corners: np.ndarray, tag_size: float) -> float:
         _, view_cosine = single_tag_view(camera, corners, tag_size)
         return self.sigma(tag_id, view_cosine)
+
+    def fit_tag_scale(self, camera: FisheyeCamera, observations: List[np.ndarray],
+            tag_size: float) -> float:
+        """
+        Scale of one more tag with the exponent held fixed: the median
+        regression intercept, median(log SSE + 2p log cos) - log median(chi2_2).
+        observations: (4,2) corners of the tag in several frames
+        """
+        values = list()
+        for corners in observations:
+            sse, view_cosine = single_tag_view(camera, corners, tag_size)
+            if is_usable_view(sse, view_cosine):
+                values.append(np.log(sse) + 2 * self.exponent * np.log(view_cosine))
+        return float(np.sqrt(np.exp(np.median(values)) / CHI2_2_MEDIAN))
 
     def to_dict(self) -> dict:
         return {'exponent': self.exponent,
@@ -62,12 +85,14 @@ class TagNoiseModel:
         column = {k: i for i, k in enumerate(tag_ids)}
         rows = list()
         y = list()
+        n_unusable = 0
         for frame in frames:
             for tag_id, corners in frame['corners'].items():
                 if tag_id not in column:
                     continue
                 sse, view_cosine = single_tag_view(camera, corners, tag_sizes[tag_id])
-                if sse <= 0 or view_cosine <= 0:
+                if not is_usable_view(sse, view_cosine):
+                    n_unusable += 1
                     continue
                 x = np.zeros(len(tag_ids) + 1)
                 x[column[tag_id]] = 1
@@ -76,6 +101,7 @@ class TagNoiseModel:
                 y.append(np.log(sse))
         X = np.array(rows)
         y = np.array(y)
+        print(f"  noise model: {len(y)} tag observations, {n_unusable} with failed single-tag fit dropped")
 
         # L1 regression as linear program: min sum(u + v) s.t. X b + u - v = y, u, v >= 0
         n, m = X.shape
