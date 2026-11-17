@@ -24,7 +24,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 import av
-from exiftool import ExifToolHelper
+from umi.common.exiftool_util import ExifTool
 from umi.common.timecode_util import mp4_get_start_datetime
 from umi.common.gripper_config_util import load_gripper_config
 from umi.common.pose_util import pose_to_mat, mat_to_pose
@@ -129,7 +129,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
     gripper_id_gripper_cal_map = dict()
     cam_serial_gripper_cal_map = dict()
 
-    with ExifToolHelper() as et:
+    with ExifTool() as et:
         for gripper_cal_path in demos_dir.glob("gripper*/gripper_range.json"):
             mp4_path = gripper_cal_path.parent.joinpath('raw_video.mp4')
             meta = list(et.get_metadata(str(mp4_path)))[0]
@@ -163,7 +163,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
     
     fps = None
     rows = list()
-    with ExifToolHelper() as et:
+    with ExifTool() as et:
         for video_dir in video_dirs:            
             mp4_path = video_dir.joinpath('raw_video.mp4')
             meta = list(et.get_metadata(str(mp4_path)))[0]

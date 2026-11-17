@@ -64,6 +64,8 @@ def main(docker_image, num_workers, no_docker_pull, session_dir):
                         'docker',
                         'run',
                         '--rm', # delete after finish
+                        # write imu_data.json as the calling user, not root
+                        '--user', f'{os.getuid()}:{os.getgid()}',
                         '--volume', str(video_dir) + ':' + '/data',
                         docker_image,
                         'node',

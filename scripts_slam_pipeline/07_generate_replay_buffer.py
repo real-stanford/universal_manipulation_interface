@@ -138,6 +138,8 @@ def main(input, output, out_res, out_fov, compression_level,
                 
                 videos_dict[str(video_path)].append({
                     'camera_idx': cam_id,
+                    # gripper mask only on wrist cameras (absent in SLAM plans: all wrist)
+                    'gripper_mask': camera.get('is_wrist_camera', True),
                     'frame_start': video_start,
                     'frame_end': video_end,
                     'buffer_start': buffer_start
@@ -167,8 +169,17 @@ def main(input, output, out_res, out_fov, compression_level,
         )
 
     def video_to_zarr(replay_buffer, mp4_path, tasks):
+        # tag corners per frame for inpainting: tag_detection.pkl (04_detect_aruco.py),
+        # else tag_corners.pkl (tag tracking head camera, 00_detect_tag_corners.py)
         pkl_path = os.path.join(os.path.dirname(mp4_path), 'tag_detection.pkl')
-        tag_detection_results = pickle.load(open(pkl_path, 'rb'))
+        if os.path.isfile(pkl_path):
+            frame_tag_corners = [[x['corners'] for x in det['tag_dict'].values()]
+                for det in pickle.load(open(pkl_path, 'rb'))]
+        else:
+            corners_path = os.path.join(os.path.dirname(mp4_path), 'tag_corners.pkl')
+            assert os.path.isfile(corners_path), f"no tag_detection.pkl or tag_corners.pkl for {mp4_path}"
+            frame_tag_corners = [list(det['corners'].values())
+                for det in pickle.load(open(corners_path, 'rb'))]
         resize_tf = get_image_transform(
             in_res=(iw, ih),
             out_res=out_res
@@ -180,6 +191,8 @@ def main(input, output, out_res, out_fov, compression_level,
                 camera_idx = task['camera_idx']
             else:
                 assert camera_idx == task['camera_idx']
+        gripper_mask = tasks[0]['gripper_mask']
+        assert all(x['gripper_mask'] == gripper_mask for x in tasks)
         name = f'camera{camera_idx}_rgb'
         img_array = replay_buffer.data[name]
         
@@ -214,22 +227,21 @@ def main(input, output, out_res, out_fov, compression_level,
                     img = frame.to_ndarray(format='rgb24')
 
                     # inpaint tags
-                    this_det = tag_detection_results[frame_idx]
-                    all_corners = [x['corners'] for x in this_det['tag_dict'].values()]
-                    for corners in all_corners:
+                    for corners in frame_tag_corners[frame_idx]:
                         img = inpaint_tag(img, corners)
                         
-                    # mask out gripper
-                    img = draw_predefined_mask(img, color=(0,0,0), 
-                        mirror=no_mirror, gripper=True, finger=False)
+                    # mask out gripper (and mirrors with --no_mirror), wrist cameras only
+                    if gripper_mask:
+                        img = draw_predefined_mask(img, color=(0,0,0), 
+                            mirror=no_mirror, gripper=True, finger=False)
                     # resize
                     if fisheye_converter is None:
                         img = resize_tf(img)
                     else:
                         img = fisheye_converter.forward(img)
                         
-                    # handle mirror swap
-                    if mirror_swap:
+                    # handle mirror swap, wrist cameras only
+                    if mirror_swap and gripper_mask:
                         img[is_mirror] = img[:,::-1,:][is_mirror]
                         
                     # compress image

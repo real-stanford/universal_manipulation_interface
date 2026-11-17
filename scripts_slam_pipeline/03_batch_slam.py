@@ -1,5 +1,12 @@
 """
 python scripts_slam_pipeline/03_batch_slam.py -i data_workspace/fold_cloth_20231214/demos
+
+Several cameras: --camera_setting SERIAL=setting.yaml per camera (others use
+--setting); --camera_serial to process only these cameras (e.g. wrist cameras,
+not a head camera). Long continuous takes: --max_lost_frames 0, since
+gopro_slam counts lost frames cumulatively over the whole video and
+terminates once the count reaches max_lost_frames.
+Prints per video: frames, lost frames and whether SLAM terminated early.
 """
 # %%
 import sys
@@ -19,6 +26,7 @@ from tqdm import tqdm
 import cv2
 import av
 import numpy as np
+from umi.common.exiftool_util import ExifTool
 from umi.common.cv_util import draw_predefined_mask
 
 
@@ -42,25 +50,44 @@ def runner(cmd, cwd, stdout_path, stderr_path, timeout, **kwargs):
 @click.option('-d', '--docker_image', default="chicheng/orb_slam3:latest")
 @click.option('-s', '--setting', default='example/calibration/gopro10_maxlens_fisheye_setting_v1_720.yaml', help='ORB_SLAM3 setting yaml, mounted into docker')
 @click.option('-mk', '--mask', default=None, help='SLAM mask png (255 = ignored), default predefined UMI gripper mask')
+@click.option('-nm', '--no_mask', is_flag=True, default=False, help='No mask, e.g. for a camera without gripper in view')
 @click.option('-n', '--num_workers', type=int, default=None)
-@click.option('-ml', '--max_lost_frames', type=int, default=60)
+@click.option('-cs', '--camera_setting', multiple=True, help='SERIAL=setting.yaml, setting of one camera (repeatable)')
+@click.option('-cam', '--camera_serial', multiple=True, help='Only videos of these cameras (repeatable), default all')
+@click.option('-ml', '--max_lost_frames', type=int, default=60, help='Terminate after this many lost frames in total, 0: never')
 @click.option('-tm', '--timeout_multiple', type=float, default=16, help='timeout_multiple * duration = timeout')
 @click.option('-np', '--no_docker_pull', is_flag=True, default=False, help="pull docker image from docker hub")
-def main(input_dir, map_path, docker_image, setting, mask, num_workers, max_lost_frames, timeout_multiple, no_docker_pull):
+def main(input_dir, map_path, docker_image, setting, mask, no_mask, camera_setting, camera_serial,
+        num_workers, max_lost_frames, timeout_multiple, no_docker_pull):
     input_dir = pathlib.Path(os.path.expanduser(input_dir)).absolute()
     input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mp4')]
     input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mp4')]
     print(f'Found {len(input_video_dirs)} video dirs')
+
+    # setting per video by camera serial
+    serial_settings = dict()
+    for item in camera_setting:
+        serial, path = item.split('=', 1)
+        serial_settings[serial] = pathlib.Path(os.path.expanduser(path)).absolute()
+        assert serial_settings[serial].is_file(), serial_settings[serial]
+    default_setting = pathlib.Path(os.path.expanduser(setting)).absolute()
+    assert default_setting.is_file()
+    video_settings = dict()
+    with ExifTool() as et:
+        for video_dir in list(input_video_dirs):
+            serial = list(et.get_metadata(str(video_dir.joinpath('raw_video.mp4'))))[0]['QuickTime:CameraSerialNumber']
+            if len(camera_serial) > 0 and serial not in camera_serial:
+                print(f"{video_dir.name}: skipped, camera {serial} not selected")
+                input_video_dirs.remove(video_dir)
+                continue
+            video_settings[video_dir.absolute()] = serial_settings.get(serial, default_setting)
+            print(f"{video_dir.name}: setting {video_settings[video_dir.absolute()].name}")
     
     if map_path is None:
         map_path = input_dir.joinpath('mapping', 'map_atlas.osa')
     else:
         map_path = pathlib.Path(os.path.expanduser(map_path)).absolute()
     assert map_path.is_file()
-
-    setting_mount_source = pathlib.Path(os.path.expanduser(setting)).absolute()
-    assert setting_mount_source.is_file()
-    setting_mount_target = pathlib.Path('/setting').joinpath(setting_mount_source.name)
 
     if mask is None:
         slam_mask = np.zeros((2028, 2704), dtype=np.uint8)
@@ -110,10 +137,13 @@ def main(input_dir, map_path, docker_image, setting, mask, num_workers, max_lost
                     duration_sec = float(video.duration * video.time_base)
                 timeout = duration_sec * timeout_multiple
                 
-                cv2.imwrite(str(mask_write_path.absolute()), slam_mask)
+                if not no_mask:
+                    cv2.imwrite(str(mask_write_path.absolute()), slam_mask)
 
                 map_mount_source = map_path
                 map_mount_target = pathlib.Path('/map').joinpath(map_mount_source.name)
+                setting_mount_source = video_settings[video_dir]
+                setting_mount_target = pathlib.Path('/setting').joinpath(setting_mount_source.name)
 
                 # run SLAM
                 cmd = [
@@ -131,9 +161,10 @@ def main(input_dir, map_path, docker_image, setting, mask, num_workers, max_lost
                     '--input_imu_json', str(json_path),
                     '--output_trajectory_csv', str(csv_path),
                     '--load_map', str(map_mount_target),
-                    '--mask_img', str(mask_path),
                     '--max_lost_frames', str(max_lost_frames)
                 ]
+                if not no_mask:
+                    cmd.extend(['--mask_img', str(mask_path)])
 
                 stdout_path = video_dir.joinpath('slam_stdout.txt')
                 stderr_path = video_dir.joinpath('slam_stderr.txt')
@@ -151,8 +182,25 @@ def main(input_dir, map_path, docker_image, setting, mask, num_workers, max_lost
             completed, futures = concurrent.futures.wait(futures)
             pbar.update(len(completed))
 
+    # per video: frames, lost frames, early termination (gopro_slam stdout)
     print("Done! Result:")
-    print([x.result() for x in completed])
+    for video_dir in input_video_dirs:
+        csv_path = video_dir.joinpath('camera_trajectory.csv')
+        stdout_path = video_dir.joinpath('slam_stdout.txt')
+        terminated = stdout_path.is_file() and 'Terminating!' in stdout_path.read_text(errors='ignore')
+        with av.open(str(video_dir.joinpath('raw_video.mp4'))) as container:
+            n_video = container.streams.video[0].frames
+        if not csv_path.is_file():
+            print(f"  {video_dir.name}: FAILED, no camera_trajectory.csv (see {stdout_path.name})")
+            continue
+        lines = csv_path.read_text().strip().split('\n')
+        header = lines[0].split(',')
+        rows = [x.split(',') for x in lines[1:]]
+        lost_idx = header.index('is_lost')
+        n_lost = sum(r[lost_idx].strip().lower() in ('true', '1') for r in rows)
+        print(f"  {video_dir.name}: {len(rows)} of {n_video} frames in trajectory, "
+            f"{n_lost} lost ({n_lost / max(len(rows), 1) * 100:.1f}%)"
+            + (", TERMINATED early (max_lost_frames)" if terminated else ''))
 
 # %%
 if __name__ == "__main__":

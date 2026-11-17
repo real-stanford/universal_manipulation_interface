@@ -73,7 +73,10 @@ def replace_matrix_data(text, key, mat):
     help='ORB_SLAM3 setting yaml providing all other parameters')
 @click.option('-o', '--output', required=True, help='Output setting yaml')
 @click.option('-r', '--resolution', type=str, default='960,720', help='SLAM input resolution, must match template')
-def main(intrinsics_json, cam_imu_json, template, output, resolution):
+@click.option('-ir', '--image_rotation', type=click.Choice(['0', '180']), default='0',
+    help='Rotation applied to the frames SLAM receives: OpenCV video capture applies the '
+    'video rotation metadata, e.g. 180 for a GoPro recorded upside down without orientation lock')
+def main(intrinsics_json, cam_imu_json, template, output, resolution, image_rotation):
     resolution = tuple(int(x) for x in resolution.split(','))
     template = pathlib.Path(os.path.expanduser(template)).absolute()
     output = pathlib.Path(os.path.expanduser(output)).absolute()
@@ -81,12 +84,20 @@ def main(intrinsics_json, cam_imu_json, template, output, resolution):
     # camera intrinsics at SLAM resolution
     intr = parse_fisheye_intrinsics(json.load(open(os.path.expanduser(intrinsics_json), 'r')))
     intr = convert_fisheye_intrinsics_resolution(intr, target_resolution=resolution)
-    K = intr['K']
+    K = intr['K'].copy()
     D = intr['D'].flatten()
 
     # camera to body transform
     cam_imu_result = json.load(open(os.path.expanduser(cam_imu_json), 'r'))
     tx_body_cam = OPENICC_TO_ORB_SLAM_BODY @ get_tx_imu_cam(cam_imu_result)
+
+    if image_rotation == '180':
+        # pixel (u, v) -> (w - 1 - u, h - 1 - v): principal point mirrored, radially
+        # symmetric fisheye distortion unchanged, camera x and y axes flipped
+        w, h = resolution
+        K[0, 2] = (w - 1) - K[0, 2]
+        K[1, 2] = (h - 1) - K[1, 2]
+        tx_body_cam = tx_body_cam @ np.diag([-1.0, -1.0, 1.0, 1.0])
 
     text = template.read_text()
     values = {

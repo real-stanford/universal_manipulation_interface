@@ -1,5 +1,19 @@
 """
 python scripts_slam_pipeline/00_process_videos.py data_workspace/toss_objects/20231113
+
+Special raw_videos entries:
+  mapping.mp4             -> demos/mapping (SLAM map)
+  gripper_calibration/    -> demos/gripper_calibration_<serial>_<time>
+  head_mapping/           -> demos/head_mapping_<serial>_<time>
+                             (tag tracking: head camera walk past all environment
+                             tags, used by 02_calibrate_bodies.py, not a demo)
+--strict: no guessing and no restructuring. raw_videos/ must exist (the
+session folder itself must not be a raw_videos folder) and contain no folders
+other than gripper_calibration/ and head_mapping/; a missing mapping.mp4 is not
+created from the largest video (tag tracking needs none) and
+gripper_calibration/ must exist.
+Without it, as in UMI: largest video becomes mapping.mp4, the first video of
+each camera becomes its gripper calibration video.
 """
 # %%
 import sys
@@ -13,19 +27,31 @@ os.chdir(ROOT_DIR)
 import pathlib
 import click
 import shutil
-from exiftool import ExifToolHelper
+from umi.common.exiftool_util import ExifTool
 from umi.common.timecode_util import mp4_get_start_datetime
 
 # %%
 @click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
 @click.argument('session_dir', nargs=-1)
-def main(session_dir):
+@click.option('-st', '--strict', is_flag=True, default=False,
+    help='No mapping / gripper calibration guessing, see docstring')
+def main(session_dir, strict):
     for session in session_dir:
         session = pathlib.Path(os.path.expanduser(session)).absolute()
         # hardcode subdirs
         input_dir = session.joinpath('raw_videos')
         output_dir = session.joinpath('demos')
         
+        if strict:
+            # never restructure the session: the folder must be the session, holding raw_videos/
+            assert session.name != 'raw_videos', \
+                f"{session} is a raw_videos folder, pass the session folder (its parent) instead"
+            assert input_dir.is_dir(), f"--strict: {input_dir} missing (session layout: <session>/raw_videos/...)"
+            unexpected = [x.name for x in input_dir.iterdir()
+                if x.is_dir() and x.name not in ('gripper_calibration', 'head_mapping')]
+            assert len(unexpected) == 0, \
+                f"--strict: unexpected folders in {input_dir}: {unexpected} (only gripper_calibration/, head_mapping/)"
+
         # create raw_videos if don't exist
         if not input_dir.is_dir():
             input_dir.mkdir()
@@ -36,7 +62,10 @@ def main(session_dir):
         
         # create mapping video if don't exist
         mapping_vid_path = input_dir.joinpath('mapping.mp4')
-        if (not mapping_vid_path.exists()) and not(mapping_vid_path.is_symlink()):
+        if strict:
+            if not (mapping_vid_path.exists() or mapping_vid_path.is_symlink()):
+                print("No raw_videos/mapping.mp4 (--strict, not guessing).")
+        elif (not mapping_vid_path.exists()) and not(mapping_vid_path.is_symlink()):
             max_size = -1
             max_path = None
             for mp4_path in list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4')):
@@ -49,13 +78,15 @@ def main(session_dir):
         
         # create gripper calibration video if don't exist
         gripper_cal_dir = input_dir.joinpath('gripper_calibration')
-        if not gripper_cal_dir.is_dir():
+        if strict:
+            assert gripper_cal_dir.is_dir(), "--strict: raw_videos/gripper_calibration/ is required"
+        elif not gripper_cal_dir.is_dir():
             gripper_cal_dir.mkdir()
             print("raw_videos/gripper_calibration don't exist! Creating one with the first video of each camera serial.")
             
             serial_start_dict = dict()
             serial_path_dict = dict()
-            with ExifToolHelper() as et:
+            with ExifTool() as et:
                 for mp4_path in list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4')):
                     if mp4_path.name.startswith('map'):
                         continue
@@ -81,7 +112,7 @@ def main(session_dir):
         input_mp4_paths = list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4'))
         print(f'Found {len(input_mp4_paths)} MP4 videos')
 
-        with ExifToolHelper() as et:
+        with ExifTool() as et:
             for mp4_path in input_mp4_paths:
                 if mp4_path.is_symlink():
                     print(f"Skipping {mp4_path.name}, already moved.")
@@ -97,6 +128,8 @@ def main(session_dir):
                     out_dname = "mapping"
                 elif mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
                     out_dname = "gripper_calibration_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                elif mp4_path.parent.name == 'head_mapping':
+                    out_dname = "head_mapping_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
                 
                 # create directory
                 this_out_dir = output_dir.joinpath(out_dname)

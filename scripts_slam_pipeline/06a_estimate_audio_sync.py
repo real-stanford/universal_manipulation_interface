@@ -41,7 +41,7 @@ import concurrent.futures
 import numpy as np
 import av
 from tqdm import tqdm
-from exiftool import ExifToolHelper
+from umi.common.exiftool_util import ExifTool
 from umi.common.timecode_util import mp4_get_start_datetime
 from umi.common.audio_sync_util import (
     read_audio_mono,
@@ -175,7 +175,7 @@ def main(input, output, reference_serial, num_workers):
 
     serials = dict()
     video_meta = dict()
-    with ExifToolHelper() as et:
+    with ExifTool() as et:
         for name, mp4_path in mp4_paths.items():
             meta = list(et.get_metadata(mp4_path))[0]
             serials[name] = meta['QuickTime:CameraSerialNumber']

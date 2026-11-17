@@ -12,13 +12,13 @@ import json
 import pathlib
 import numpy as np
 from tqdm import tqdm
-from exiftool import ExifToolHelper
+from umi.common.exiftool_util import ExifTool
 
 # %%
 @click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
 @click.argument('session_dir', nargs=-1)
 def main(session_dir):
-    with ExifToolHelper() as et:
+    with ExifTool() as et:
         for session in tqdm(session_dir):
             session = pathlib.Path(os.path.expanduser(session)).absolute()
             # hardcode subdirs

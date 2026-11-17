@@ -13,43 +13,47 @@ os.chdir(ROOT_DIR)
 import pathlib
 import click
 import subprocess
-from exiftool import ExifToolHelper
+from umi.common.exiftool_util import ExifTool
 from umi.common.gripper_config_util import load_gripper_config
 
 # %%
 @click.command()
 @click.argument('session_dir', nargs=-1)
 @click.option('-gc', '--gripper_config', default=None, help='Gripper config yaml, default UMI finger tag convention')
-def main(session_dir, gripper_config):
+@click.option('-st', '--skip_slam_tag', is_flag=True, default=False,
+    help='Only gripper range calibration, e.g. for tag tracking (no SLAM map)')
+def main(session_dir, gripper_config, skip_slam_tag):
     gripper_config = load_gripper_config(gripper_config)
     script_dir = pathlib.Path(__file__).parent.parent.joinpath('scripts')
-    
+
     for session in session_dir:
         session = pathlib.Path(session)
         demos_dir = session.joinpath('demos')
         mapping_dir = demos_dir.joinpath('mapping')
         slam_tag_path = mapping_dir.joinpath('tx_slam_tag.json')
-            
+
         # run slam tag calibration
-        script_path = script_dir.joinpath('calibrate_slam_tag.py')
-        assert script_path.is_file()
-        tag_path = mapping_dir.joinpath('tag_detection.pkl')
-        assert tag_path.is_file()
-        csv_path = mapping_dir.joinpath('camera_trajectory.csv')
-        if not csv_path.is_file():
-            csv_path = mapping_dir.joinpath('mapping_camera_trajectory.csv')
-            print("camera_trajectory.csv not found! using mapping_camera_trajectory.csv")
-        assert csv_path.is_file()
-        
-        cmd = [
-            'python', str(script_path),
-            '--tag_detection', str(tag_path),
-            '--csv_trajectory', str(csv_path),
-            '--output', str(slam_tag_path),
-            '--keyframe_only'
-        ]
-        subprocess.run(cmd)
-        
+        if not skip_slam_tag:
+            script_path = script_dir.joinpath('calibrate_slam_tag.py')
+            assert script_path.is_file()
+            tag_path = mapping_dir.joinpath('tag_detection.pkl')
+            assert tag_path.is_file()
+            csv_path = mapping_dir.joinpath('camera_trajectory.csv')
+            if not csv_path.is_file():
+                csv_path = mapping_dir.joinpath('mapping_camera_trajectory.csv')
+                print("camera_trajectory.csv not found! using mapping_camera_trajectory.csv")
+            assert csv_path.is_file()
+
+            cmd = [
+                'python', str(script_path),
+                '--tag_detection', str(tag_path),
+                '--csv_trajectory', str(csv_path),
+                '--output', str(slam_tag_path),
+                '--keyframe_only'
+            ]
+            result = subprocess.run(cmd)
+            assert result.returncode == 0, "slam tag calibration failed"
+
         # run gripper range calibration
         script_path = script_dir.joinpath('calibrate_gripper_range.py')
         assert script_path.is_file()
@@ -64,7 +68,7 @@ def main(session_dir, gripper_config):
                 '--output', str(gripper_range_path)
             ]
             if gripper_config is not None:
-                with ExifToolHelper() as et:
+                with ExifTool() as et:
                     meta = list(et.get_metadata(str(gripper_dir.joinpath('raw_video.mp4'))))[0]
                 cam_serial = meta['QuickTime:CameraSerialNumber']
                 if cam_serial not in gripper_config['grippers']:
@@ -78,7 +82,9 @@ def main(session_dir, gripper_config):
                 ]
                 if 'nominal_z' in gripper_config:
                     cmd += ['--nominal_z', str(gripper_config['nominal_z'])]
-            subprocess.run(cmd)
+            result = subprocess.run(cmd)
+            assert result.returncode == 0 and gripper_range_path.is_file(), \
+                f"gripper range calibration failed for {gripper_dir.name}"
 
             
 # %%
