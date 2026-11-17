@@ -1,0 +1,34 @@
+# Gripper hardware for umi.common.gripper_config_util.load_gripper_config
+# Measured from sample_003 gripper calibration videos (tag_detection.pkl,
+# gopro_intrinsics_2_7k.json from OpenICC), 2026-11-12.
+
+# finger tag z distance from camera [m], measured median 0.0784-0.0797
+nominal_z: 0.079
+
+# TCP (fingertips) in the wrist camera frame: (0, cam_to_center_height,
+# cam_to_mount_offset + tcp_offset). Measured 2026-11-17 on both grippers:
+# lens to fingertips 192 mm along the gripper, 75 mm below the lens centre
+# (UMI: 86 mm, 219.65 mm). cam_to_mount_offset kept at the UMI value.
+cam_to_center_height: 0.075
+cam_to_mount_offset: 0.01465
+tcp_offset: 0.17735
+
+# Finger tags and sides as of the 2026-11-16 recording (tag 6 no longer on both
+# grippers), from the wrist videos: image-left / image-right finger tag.
+# finger_tag_to_tip: fingertips 0.192 m (measured) and finger tags 0.079 m (nominal_z)
+# in front of the camera: 0.192 - 0.079 = 0.113 m
+grippers:
+  C3501326029433:   # right gripper (held in right hand)
+    gripper_id: 0
+    left_finger_tag_id: 0
+    right_finger_tag_id: 1
+    # TCP estimated 2026-11-17 from the wrist view (closed fingertips ~24 px nearer than
+    # the shared 192 mm TCP): ~10 mm shorter, camera to fingertips 0.182 m, 75 mm below
+    finger_tag_to_tip: 0.103
+    cam_to_center_height: 0.075
+    tcp_offset: 0.16735
+  C3501326502891:   # left gripper (held in left hand)
+    gripper_id: 1
+    left_finger_tag_id: 7
+    right_finger_tag_id: 6
+    finger_tag_to_tip: 0.113

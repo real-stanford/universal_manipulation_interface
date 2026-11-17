@@ -1,0 +1,72 @@
+# Tag tracking config, see umi/tag_tracking/config.py
+aruco_config: aruco_config.yaml
+corner_noise: corner_noise.json
+gripper_config: gripper_config.yaml
+
+head_camera: C3501326502664
+# once per setup calibration (scripts_tag_tracking/calibrate_setup.py, from 2026-11-16 task1):
+# tag map, cube shapes, cube -> wrist -> TCP; sessions copy it (step use_setup)
+setup_calibration: setup_20261116
+head_imu:
+  cam_imu_calibration: openicc/head/cam_imu/cam_imu_calib_result_GX010298.json
+  noise_setting: head_gopro12_wide_fisheye_setting_720.yaml
+# per wrist camera: OpenICC camera-IMU calibration and IMU noise (its ORB_SLAM3 setting),
+# for scripts_tag_tracking/03c_fuse_gripper_imu.py
+gripper_imu:
+  C3501326029433:   # right gripper (OpenICC gripper2)
+    cam_imu_calibration: openicc/gripper2/cam_imu/cam_imu_calib_result_GX019230.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326029433.yaml
+  C3501326502891:   # left gripper (OpenICC gripper1)
+    cam_imu_calibration: openicc/gripper1/cam_imu/cam_imu_calib_result_GX019255.json
+    noise_setting: gopro12_wide_fisheye_setting_720.yaml
+# pose accepted if its uncertainty is within this accuracy
+# default: UMI SLAM tracking accuracy (Chi et al. 2024, Sec. VII)
+accuracy:
+  position_std: 0.0061   # m
+  rotation_std: 3.5      # deg
+cameras:
+  C3501326502664: openicc/head/cam/cam_calib_GX010297_fi_1.0.json
+  C3501326029433: openicc/gripper2/cam/cam_calib_GX019229_fi_1.0.json
+  C3501326502891: openicc/gripper1/cam/cam_calib_GX019254_fi_1.0.json
+
+bodies:
+  environment:
+    static: true
+    # tags printed in aruco_env_tags_A4.pdf
+    tags: [13, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35,
+           38, 39, 40, 41, 44, 45, 46, 47]
+  # sides as of the 2026-11-16 recording (head view and wrist cross-views)
+  left_cube:
+    tags: [8, 9, 10, 11]
+    gripper_camera: C3501326502891
+    robot_index: 1   # UMI convention: 0 right, 1 left
+  right_cube:
+    tags: [2, 3, 4, 5]
+    gripper_camera: C3501326029433
+    robot_index: 0
+
+# continuous takes: docked -> bang -> task -> bang -> docked, detected before tracking by
+# scripts_tag_tracking/00b_segment_episodes.py (rules: umi/tag_tracking/wrist_events.py).
+# Values validated on 2026-11-16 task1 (29 of 29 episodes); check new takes with
+# scripts_tag_tracking/check_wrist_events.py
+episodes:
+  dock_tags: [46, 47]
+  # idle: both wrist IMUs still and the head sees both cubes at the dock tags
+  still_sec: 1.0          # s, stillness window
+  gyro_still: 0.04        # rad/s, gyro RMS below this = still
+  dock_distance: 0.35     # m, 3D cube center to a dock tag (docked ~0.2, held above the dock >= 0.55)
+  min_dock_frames: 15     # head frames with the docked view that confirm idle
+  # bang: spikes in both wrist IMUs at once + click in the head audio, not at the dock
+  bang_accel: 5.0         # m/s^2, weaker of the two wrist spikes
+  bang_tolerance: 0.02    # s, max time between the two wrist spikes, after the fitted clock drift
+  bang_search_tolerance: 0.06  # s, wrist spikes paired within this before the drift fit
+  bang_merge_sec: 0.5     # s, hits closer than this are one bang
+  audio_ratio: 5.0        # head audio click level over its 1 s background
+  audio_tolerance: 0.015  # s, click within this of wrist spike + lag
+  audio_lag_search: 0.3   # s, spike-click pairs for the lag estimate (task1: 43 ms)
+  lag_accel: 10.0         # m/s^2, spikes used for the lag estimate
+  dock_window: 0.25       # s, no bang within this of a docked head view
+  idle_margin: 1.0        # s, no bang this close to idle
+  min_episode_sec: 3.0    # s, shorter episodes are rejected
+  # export
+  max_gap_sec: 0.25       # s, longest tracking gap inside an exported episode

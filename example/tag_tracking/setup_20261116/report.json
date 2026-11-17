@@ -1,0 +1,127 @@
+{
+  "source_session": "20261116/task1",
+  "head_mapping_videos": [
+    "head_mapping_C3501326502664_2026.11.16_16.53.16.285550"
+  ],
+  "head_task_video": "demo_C3501326502664_2026.11.16_17.24.06.550633",
+  "n_frames": {
+    "environment": 3747,
+    "right_cube": 4183,
+    "left_cube": 2820
+  },
+  "missing_tags": {
+    "environment": [
+      13,
+      15,
+      17,
+      26,
+      27,
+      28,
+      29,
+      32,
+      33,
+      34,
+      35,
+      38,
+      39,
+      40,
+      41,
+      44
+    ],
+    "right_cube": [],
+    "left_cube": []
+  },
+  "variance_factor": {
+    "environment": 9.976694756093751,
+    "right_cube": 4.937534871420444,
+    "left_cube": 3.4701622605660765
+  },
+  "line_delay_us": 0.0,
+  "readout_ms": 11.0,
+  "T_wrist_tcp": {
+    "right_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.182
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "left_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.192
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "cube_to_wrist": {
+    "right_cube": {
+      "n_candidates": 7754,
+      "n_sampled": 600,
+      "n_wrist_invalid": 431,
+      "n_head_invalid": 21,
+      "n_too_fast": 61,
+      "n_estimates": 87,
+      "n_inliers": 86,
+      "spread_mm": 5.432180470888342,
+      "spread_deg": 0.7650484452992019,
+      "std_error_mm": 1.1617833512855722,
+      "std_error_deg": 0.09979617129966005,
+      "median_cube_speed": 0.17153467671505016,
+      "distance_cube_to_wrist_mm": 86.83580941790653
+    },
+    "left_cube": {
+      "n_candidates": 3991,
+      "n_sampled": 600,
+      "n_wrist_invalid": 420,
+      "n_head_invalid": 23,
+      "n_too_fast": 80,
+      "n_estimates": 77,
+      "n_inliers": 77,
+      "spread_mm": 3.6530987392040792,
+      "spread_deg": 0.5318177762574696,
+      "std_error_mm": 0.5298993564009573,
+      "std_error_deg": 0.0814489892014102,
+      "median_cube_speed": 0.17626338585423068,
+      "distance_cube_to_wrist_mm": 133.95108295194922
+    }
+  }
+}

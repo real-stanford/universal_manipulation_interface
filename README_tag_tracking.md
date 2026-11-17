@@ -23,17 +23,30 @@ docker pull chicheng/openicc:latest
 
 ## Calibration files
 
-One directory, e.g. `umi_calib/`, all paths in the configs relative to it:
+`example/tag_tracking/` holds the calibration of our setup; all paths in the configs are relative to it.
 
 | File | Content |
 |---|---|
-| `tag_tracking.yaml` | cameras, bodies, episodes; format in `umi/tag_tracking/config.py` |
+| `tag_tracking.yaml` | cameras by serial, bodies, episodes; format in `umi/tag_tracking/config.py` |
 | `aruco_config.yaml` | dictionary and tag sizes (black square edge, m) |
 | `gripper_config.yaml` | finger tags and TCP geometry per wrist camera; format in `umi/common/gripper_config_util.py` |
+| `corner_noise.json` | tag corner noise (step 1) |
+| `setup_20261116/` | setup calibration (step 2): tag map, cube shapes, cube -> wrist -> TCP |
+| `openicc/<camera>/cam/` | OpenICC intrinsics |
+| `openicc/<camera>/cam_imu/` | OpenICC camera-IMU calibration (fitted trajectory removed) |
+| `*_setting_720*.yaml` | IMU noise per camera |
 | `gopro_intrinsics_2_7k.json` | fallback intrinsics |
-| `corner_noise.json` | from step 2 below |
-| per camera | OpenICC intrinsics json (`cameras`) |
-| per wrist camera | OpenICC camera-IMU json and IMU noise yaml (`gripper_imu`) |
+
+Cameras (GoPro HERO12, Wide, 2.7K 4:3, 59.94 fps, stabilization off):
+
+| Serial | Camera | OpenICC |
+|---|---|---|
+| C3501326502664 | head | `openicc/head` |
+| C3501326029433 | right gripper (robot0) | `openicc/gripper2` |
+| C3501326502891 | left gripper (robot1) | `openicc/gripper1` |
+
+With other cameras, replace the serials, intrinsics and camera-IMU files. Steps 1 and 2 below
+are done for this setup; redo step 2 after moving environment tags or remounting a cube or camera.
 
 Print tags (black square `-t` mm, as in `aruco_config.yaml`):
 
@@ -64,23 +77,23 @@ python scripts/gen_tag_sticker_pdfs.py -o print/env_tags --ids 14-17,20-23,26-29
 From a video of a static camera looking at static tags:
 
 ```
-python scripts_tag_tracking/01_measure_corner_noise.py -i <static_video.MP4> -c umi_calib/tag_tracking.yaml
+python scripts_tag_tracking/01_measure_corner_noise.py -i <static_video.MP4> -c example/tag_tracking/tag_tracking.yaml
 ```
 
 ### 2. Setup calibration (once per setup)
 
-On one session, without `setup_calibration` in `tag_tracking.yaml`:
+On one session, with `setup_calibration` removed from `tag_tracking.yaml`:
 
 ```
-python run_tag_tracking_pipeline.py -c umi_calib/tag_tracking.yaml --stop_after segment_episodes <session>
-python scripts_tag_tracking/check_wrist_events.py -i <session> -c umi_calib/tag_tracking.yaml
-python scripts_tag_tracking/calibrate_setup.py -i <session> -c umi_calib/tag_tracking.yaml -o umi_calib/setup_01 -j 24
+python run_tag_tracking_pipeline.py -c example/tag_tracking/tag_tracking.yaml --stop_after segment_episodes <session>
+python scripts_tag_tracking/check_wrist_events.py -i <session> -c example/tag_tracking/tag_tracking.yaml
+python scripts_tag_tracking/calibrate_setup.py -i <session> -c example/tag_tracking/tag_tracking.yaml -o example/tag_tracking/setup_01 -j 24
 ```
 
 `check_wrist_events.py` plots the episode detection to `<session>/tag_tracking/wrist_events/`;
 tune the `episodes` section if episodes are missed.
 
-Then add to `tag_tracking.yaml`:
+Then set in `tag_tracking.yaml`:
 
 ```yaml
 setup_calibration: setup_01
@@ -89,13 +102,13 @@ setup_calibration: setup_01
 After changing only the TCP geometry in `gripper_config.yaml`:
 
 ```
-python scripts_tag_tracking/calibrate_setup.py -c umi_calib/tag_tracking.yaml -o umi_calib/setup_01 --tcp_only
+python scripts_tag_tracking/calibrate_setup.py -c example/tag_tracking/tag_tracking.yaml -o example/tag_tracking/setup_20261116 --tcp_only
 ```
 
 ### 3. Sessions
 
 ```
-python run_tag_tracking_pipeline.py -c umi_calib/tag_tracking.yaml -j 16 -nr <session>
+python run_tag_tracking_pipeline.py -c example/tag_tracking/tag_tracking.yaml -j 16 -nr <session>
 python scripts_tag_tracking/07_export_mcap.py -i <session> -j 4
 ```
 
@@ -112,16 +125,16 @@ Logs: `<session>/logs/`.
 After a TCP change, without re-tracking:
 
 ```
-python scripts_tag_tracking/00c_use_setup.py -i <session> -c umi_calib/tag_tracking.yaml
-python scripts_tag_tracking/06_export_dataset_plan.py -i <session> -c umi_calib/tag_tracking.yaml
+python scripts_tag_tracking/00c_use_setup.py -i <session> -c example/tag_tracking/tag_tracking.yaml
+python scripts_tag_tracking/06_export_dataset_plan.py -i <session> -c example/tag_tracking/tag_tracking.yaml
 python scripts_tag_tracking/07_export_mcap.py -i <session> -j 4
 ```
 
 ### 4. Checks
 
 ```
-python scripts_tag_tracking/check_tcp_frame.py -i <session> -c umi_calib/tag_tracking.yaml
-python scripts_tag_tracking/04_render_tracking.py -i <session> -c umi_calib/tag_tracking.yaml
+python scripts_tag_tracking/check_tcp_frame.py -i <session> -c example/tag_tracking/tag_tracking.yaml
+python scripts_tag_tracking/04_render_tracking.py -i <session> -c example/tag_tracking/tag_tracking.yaml
 ```
 
 ### 5. Training dataset
