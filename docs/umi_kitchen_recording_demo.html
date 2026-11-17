@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMI · Kitchen recording walkthrough</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111317; color: #e6e8eb;
+               font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #app canvas { display: block; }
+  #panel { position: absolute; left: 14px; top: 14px; bottom: 14px; width: 330px; box-sizing: border-box;
+           background: rgba(20,22,27,.94); border: 1px solid #2e3239; border-radius: 12px;
+           padding: 14px 16px; overflow-y: auto; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .muted { color: #9aa1ad; }
+  .steps { display: grid; gap: 4px; margin: 12px 0; }
+  .steps button { text-align: left; background: #1d2026; color: #c9ced6; border: 1px solid #2e3239;
+                  border-radius: 7px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  .steps button.on { border-color: #6ea0ff; color: #fff; background: #1e2a40; }
+  .steps button .bar { display: block; height: 2px; background: #2e3239; margin-top: 5px; border-radius: 2px; overflow: hidden; }
+  .steps button .bar i { display: block; height: 100%; width: 0; background: #6ea0ff; }
+  ul { padding-left: 16px; margin: 6px 0 10px; }
+  li { margin: 3px 0; }
+  .ctrl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .ctrl button, .ctrl select { background: #1d2026; color: #e6e8eb; border: 1px solid #2e3239;
+       border-radius: 7px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .ctrl label { color: #9aa1ad; display: flex; gap: 5px; align-items: center; }
+  code, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+  pre { background: #15171b; border: 1px solid #2e3239; border-radius: 7px; padding: 8px 10px; margin: 6px 0; }
+  .legend { display: grid; grid-template-columns: 14px 1fr; gap: 4px 8px; align-items: center; font-size: 12px; margin-top: 8px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; }
+  h3 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #9aa1ad; margin: 14px 0 4px; }
+  #pip { position: absolute; right: 14px; bottom: 14px; width: 400px; height: 300px;
+         border: 2px solid #3a3f48; border-radius: 8px; pointer-events: none; box-sizing: border-box; }
+  #pipLabel { position: absolute; right: 14px; bottom: 320px; width: 400px; font-size: 12px; color: #9aa1ad;
+              display: flex; justify-content: space-between; pointer-events: none; }
+  #hud { position: absolute; right: 14px; top: 14px; display: flex; gap: 6px; pointer-events: none; }
+  .chip { background: rgba(20,22,27,.9); border: 1px solid #2e3239; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  .chip.rec { border-color: #f07267; color: #ffb3ad; }
+  .chip.rec::before { content: "● "; color: #ff4d40; }
+  #caption { position: absolute; left: 50%; transform: translateX(-50%); bottom: 22px; max-width: 560px;
+             margin-left: 60px; text-align: center; font-size: 16px; font-weight: 600;
+             background: rgba(20,22,27,.88); border: 1px solid #2e3239; border-radius: 10px; padding: 8px 16px;
+             pointer-events: none; }
+  #caption:empty { display: none; }
+  @media (max-width: 1100px) { #caption { bottom: 330px; margin-left: 170px; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="panel">
+  <h1>UMI kitchen recording walkthrough</h1>
+  <div class="muted">Bimanual UMI · GoPro Wide · no mirrors. Drag to orbit, scroll to zoom.</div>
+  <div class="steps" id="steps"></div>
+  <div class="ctrl">
+    <button id="btnPlay">❚❚ Pause</button>
+    <button id="btnRestart">↺ Step</button>
+    <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+    <select id="pipSel"><option value="auto" selected>Cam: auto</option><option value="A">Cam: A (right)</option><option value="B">Cam: B (left)</option><option value="C">Cam: head</option></select>
+    <label><input type="checkbox" id="chkLabels" checked> labels</label>
+    <label><input type="checkbox" id="chkAuto" checked> autoplay</label>
+  </div>
+  <div id="stepBody"></div>
+  <h3>Legend</h3>
+  <div class="legend">
+    <span class="sw" style="background:#f5c542"></span><span>Tag 13 — world frame, flat on counter, 16 cm</span>
+    <span class="sw" style="background:#4cc283"></span><span>Environment tags — texture for SLAM, 10 cm</span>
+    <span class="sw" style="background:#f07267"></span><span>Never here — doors, drawers, objects</span>
+    <span class="sw" style="background:#ff9a3c"></span><span>Gripper A = right = camera 0 (finger tags 0, 1)</span>
+    <span class="sw" style="background:#5b8cff"></span><span>Gripper B = left = camera 1 (finger tags 6, 7)</span>
+    <span class="sw" style="background:#b07cff"></span><span>Head cam = camera 2 (non-gripper, video only)</span>
+  </div>
+  <p class="muted" style="font-size:11.5px;margin-top:12px">Camera view is a pinhole approximation of the GoPro Wide lens. The tag-13 check uses the pipeline's rules: 0.3–2 m away and within 0.6 × half-height of the image center.</p>
+</div>
+
+<div id="hud"><span class="chip" id="chipTime">00:00</span><span class="chip" id="chipA">A idle</span><span class="chip" id="chipB">B idle</span><span class="chip" id="chipC">Head idle</span></div>
+<div id="pipLabel"><span id="pipName">Gripper camera</span><span id="pipTags"></span></div>
+<canvas id="pip" width="400" height="300"></canvas>
+<div id="caption"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---------- real DICT_4X4_50 bit patterns (generated with OpenCV) ----------
+const BITS = {"0":"1011010100110010","1":"0000111110011010","6":"1001111000101110","7":"1100010011110010",
+  "13":"0010101000001111","14":"0010010010110001","15":"0010011000111110","16":"0100011001100101",
+  "20":"1000011010001011","21":"1011000000101011","22":"1100110011010101"};
+
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const UP = V(0, 1, 0);
+const LABEL_LAYER = 1;
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d22);
+
+const cam = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.02, 60);
+cam.position.set(1.9, 2.0, 3.0);
+cam.layers.enable(LABEL_LAYER);
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.target.set(-0.3, 1.1, 0.3);
+controls.enableDamping = true;
+let userOrbiting = false;
+controls.addEventListener('start', () => { userOrbiting = true; camTween = null; });
+controls.addEventListener('end', () => { userOrbiting = false; });
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3530, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(2.5, 4.5, 3.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -3.5, right: 3.5, top: 3.5, bottom: -3.5, near: 0.5, far: 15 });
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+const under = new THREE.PointLight(0xfff2dd, 0.6, 3);
+under.position.set(-0.6, 1.4, 0.4);
+scene.add(under);
+
+// ---------- helpers ----------
+const mat = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.8, ...o });
+function box(w, h, d, m, x, y, z, parent = scene) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+function canvasTex(w, h, draw, nearest = false) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  if (nearest) { t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; }
+  return t;
+}
+function arucoTexture(id) {
+  const bits = BITS[String(id)];
+  return canvasTex(8, 8, (g) => {
+    g.fillStyle = '#fff'; g.fillRect(0, 0, 8, 8);         // quiet zone
+    g.fillStyle = '#000'; g.fillRect(1, 1, 6, 6);         // black border
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++)
+      if (bits[r * 4 + c] === '1') { g.fillStyle = '#fff'; g.fillRect(2 + c, 2 + r, 1, 1); }
+  }, true);
+}
+// tag plane: black square edge = size (white quiet zone adds 1 cell each side)
+function makeTag(id, size, { opacity = 1 } = {}) {
+  const s = size * 8 / 6;
+  const m = new THREE.MeshStandardMaterial({ map: arucoTexture(id), roughness: 0.9,
+    transparent: opacity < 1, opacity, polygonOffset: true, polygonOffsetFactor: -2 });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(s, s), m);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+function label(text, color, scale = 0.32) {
+  const tex = canvasTex(512, 96, (g, w, h) => {
+    g.fillStyle = 'rgba(17,19,23,.88)';
+    g.beginPath(); g.roundRect(2, 2, w - 4, h - 4, 30); g.fill();
+    g.lineWidth = 5; g.strokeStyle = color; g.stroke();
+    let fs = 46;
+    do { g.font = `600 ${fs}px -apple-system, Segoe UI, Roboto, sans-serif`; fs -= 2; } while (g.measureText(text).width > w - 50 && fs > 16);
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, w / 2, h / 2 + 2);
+  });
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.scale.set(scale, scale * 96 / 512, 1);
+  sp.center.set(0.5, 0);
+  sp.renderOrder = 10;
+  sp.layers.set(LABEL_LAYER);
+  return sp;
+}
+const labels = [];
+function addLabel(text, color, pos, scale) {
+  const l = label(text, color, scale); l.position.copy(pos); scene.add(l); labels.push(l); return l;
+}
+
+// ---------- kitchen ----------
+const floorTex = canvasTex(512, 512, (g, w, h) => {
+  g.fillStyle = '#7d7266'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#6b6156'; g.lineWidth = 6;
+  for (let i = 0; i <= 4; i++) { g.beginPath(); g.moveTo(0, i * 128); g.lineTo(w, i * 128); g.stroke(); }
+  for (let r = 0; r < 4; r++) for (let i = 0; i < 2; i++) {
+    const x = (i * 256 + (r % 2) * 128) % w; g.beginPath(); g.moveTo(x, r * 128); g.lineTo(x, r * 128 + 128); g.stroke();
+  }
+});
+floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping; floorTex.repeat.set(4, 4);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 5), mat(0xffffff, { map: floorTex }));
+floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, 1.5); floor.receiveShadow = true; scene.add(floor);
+
+const wallM = mat(0xe8e5de, { roughness: 0.95 });
+box(4.6, 2.6, 0.05, wallM, -0.2, 1.3, -0.025);               // back wall (plain = low texture)
+box(0.05, 2.6, 2.2, wallM, -2.025, 1.3, 1.05);               // left wall
+
+// window with closed blinds on left wall
+box(0.04, 1.0, 1.0, mat(0xffffff), -1.995, 1.55, 1.15);
+for (let i = 0; i < 18; i++) box(0.01, 0.045, 0.9, mat(0xd9d4c6, { roughness: 0.7 }), -1.97, 1.11 + i * 0.05, 1.15);
+
+// base cabinets (white, plain)
+const cabM = mat(0xf2f0ea, { roughness: 0.55 });
+const handleM = mat(0x9a9ea5, { metalness: 0.8, roughness: 0.3 });
+box(2.6, 0.82, 0.58, cabM, -0.7, 0.49, 0.29);                // body x -2.0..0.6
+box(2.6, 0.08, 0.5, mat(0x2a2a2a), -0.7, 0.04, 0.25);        // toe kick
+for (let x = -1.7; x <= 0.31; x += 0.6) {
+  box(0.58, 0.58, 0.02, cabM, x, 0.42, 0.59);                 // door
+  box(0.58, 0.16, 0.02, cabM, x, 0.81, 0.59);                 // drawer
+  box(0.12, 0.012, 0.02, handleM, x, 0.81, 0.605);
+  box(0.012, 0.12, 0.02, handleM, x + 0.24, 0.55, 0.605);
+}
+// oven column under stove x 0.6..1.2
+box(0.6, 0.82, 0.58, mat(0x1d1f22, { roughness: 0.4, metalness: 0.3 }), 0.9, 0.49, 0.29);
+box(0.5, 0.35, 0.01, mat(0x0c0d0f, { roughness: 0.1, metalness: 0.2 }), 0.9, 0.45, 0.585);
+box(0.45, 0.02, 0.03, handleM, 0.9, 0.72, 0.6);
+
+// countertop (glossy dark) with sink cutout x -1.3..-0.7, z 0.1..0.5
+const ctM = mat(0x2b2d31, { roughness: 0.18, metalness: 0.15 });
+box(0.7, 0.04, 0.63, ctM, -1.65, 0.92, 0.315);
+box(1.3, 0.04, 0.63, ctM, -0.05, 0.92, 0.315);
+box(0.6, 0.04, 0.1, ctM, -1.0, 0.92, 0.05);
+box(0.6, 0.04, 0.13, ctM, -1.0, 0.92, 0.565);
+// stainless sink
+const steel = mat(0xb9bdc3, { metalness: 0.9, roughness: 0.28 });
+box(0.6, 0.02, 0.4, steel, -1.0, 0.72, 0.3);
+box(0.02, 0.22, 0.4, steel, -1.29, 0.82, 0.3); box(0.02, 0.22, 0.4, steel, -0.71, 0.82, 0.3);
+box(0.6, 0.22, 0.02, steel, -1.0, 0.82, 0.11); box(0.6, 0.22, 0.02, steel, -1.0, 0.82, 0.49);
+const faucet = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.02, 0.32, 16), steel);
+faucet.position.set(-1.0, 1.1, 0.05); faucet.castShadow = true; scene.add(faucet);
+box(0.03, 0.03, 0.2, steel, -1.0, 1.25, 0.14);
+// cooktop
+box(0.6, 0.012, 0.52, mat(0x0b0b0c, { roughness: 0.12 }), 0.9, 0.946, 0.3);
+for (const [dx, dz] of [[-0.14, -0.12], [0.14, -0.12], [-0.14, 0.12], [0.14, 0.12]]) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.005, 8, 40), mat(0x5a2a22, { roughness: 0.5 }));
+  ring.rotation.x = -Math.PI / 2; ring.position.set(0.9 + dx, 0.953, 0.3 + dz); scene.add(ring);
+}
+box(0.6, 0.28, 0.45, steel, 0.9, 1.78, 0.225);                // hood
+// upper cabinets x -2.0..0.6
+box(2.6, 0.7, 0.35, cabM, -0.7, 1.8, 0.175);
+for (let x = -1.85; x <= 0.46; x += 0.433) {
+  box(0.42, 0.68, 0.02, cabM, x, 1.8, 0.36);
+  box(0.012, 0.12, 0.02, handleM, x + 0.17, 1.55, 0.375);
+}
+// fridge x 1.25..2.05
+const fridgeM = mat(0xc7cad0, { metalness: 0.6, roughness: 0.35 });
+box(0.8, 1.85, 0.72, fridgeM, 1.65, 0.925, 0.36);
+box(0.8, 0.01, 0.02, mat(0x333333), 1.65, 1.2, 0.725);
+box(0.02, 0.5, 0.03, handleM, 1.32, 1.55, 0.745);
+box(0.02, 0.4, 0.03, handleM, 1.32, 0.85, 0.745);
+
+// matte mat on work area
+const matTex = canvasTex(512, 256, (g, w, h) => {
+  g.fillStyle = '#5c6a5f'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.22)';
+    const s = 1 + Math.random() * 3; g.fillRect(Math.random() * w, Math.random() * h, s, s);
+  }
+  g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 3;
+  for (let x = 32; x < w; x += 64) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+});
+const matMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.46), mat(0xffffff, { map: matTex, roughness: 1 }));
+matMesh.rotation.x = -Math.PI / 2; matMesh.position.set(0.12, 0.9415, 0.33); matMesh.receiveShadow = true; scene.add(matMesh);
+addLabel('matte mat (counter is glossy)', '#9aa1ad', V(0.12, 0.95, 0.58), 0.36);
+
+// ---------- tags ----------
+const TAG_COL = { world: '#f5c542', env: '#4cc283', bad: '#f07267' };
+const tags = {};   // id -> {mesh, normal(world)}
+function placeTag(id, size, pos, rotY = 0, rotX = 0, kind = 'env', labelText = null, labelOffset = V(0, 0.09, 0)) {
+  const m = makeTag(id, size);
+  m.position.copy(pos); m.rotation.set(rotX, rotY, 0, 'YXZ');
+  scene.add(m);
+  m.updateMatrixWorld();
+  const n = V(0, 0, 1).applyQuaternion(m.getWorldQuaternion(new THREE.Quaternion()));
+  tags[id] = { mesh: m, normal: n, size };
+  addLabel(labelText ?? `${id} · ${Math.round(size * 100)} cm`, TAG_COL[kind], pos.clone().add(labelOffset), kind === 'world' ? 0.36 : 0.26);
+}
+placeTag(13, 0.16, V(-0.5, 0.9425, 0.33), 0, -Math.PI / 2, 'world', '13 · world · 16 cm · flat', V(0, 0.03, 0.06));
+placeTag(14, 0.10, V(-1.5, 1.2, 0.002));
+placeTag(15, 0.10, V(-0.25, 1.2, 0.002));
+placeTag(20, 0.10, V(0.42, 1.18, 0.002));
+placeTag(21, 0.10, V(-1.998, 1.2, 0.3), Math.PI / 2);
+placeTag(16, 0.10, V(1.248, 1.35, 0.42), -Math.PI / 2);
+
+// "never here" ghost tags
+const badGroup = new THREE.Group(); scene.add(badGroup);
+function badTag(id, pos, rotY, text) {
+  const m = makeTag(id, 0.10, { opacity: 0.45 }); m.position.copy(pos); m.rotation.y = rotY; m.layers.set(LABEL_LAYER);
+  badGroup.add(m);
+  const x = label('✗  ' + text, TAG_COL.bad, 0.3); x.position.copy(pos).add(V(0, 0.08, 0.02)); badGroup.add(x);
+}
+badTag(22, V(-0.1, 0.45, 0.602), 0, 'not on cabinet doors');
+badTag(22, V(1.6, 1.45, 0.723), 0, 'not on fridge door');
+
+// ---------- task objects ----------
+const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.095, 0.015, 40), mat(0xf4f1ea, { roughness: 0.4 }));
+plate.castShadow = plate.receiveShadow = true; scene.add(plate);
+const mug = new THREE.Group();
+const mugM = mat(0x2f8f9d, { roughness: 0.45 });
+const mugBody = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.032, 0.09, 32), mugM); mugBody.castShadow = true; mug.add(mugBody);
+const mugHandle = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.006, 8, 24, Math.PI), mugM);
+mugHandle.position.set(0.035, 0, 0); mugHandle.rotation.z = -Math.PI / 2; mug.add(mugHandle);
+scene.add(mug);
+const PLATE0 = V(-0.05, 0.9495, 0.33), MUG0 = V(0.35, 0.987, 0.40);
+function resetObjects() { plate.position.copy(PLATE0); mug.position.copy(MUG0); }
+resetObjects();
+
+// phone with rolling QR (time sync)
+const phone = new THREE.Group(); scene.add(phone);
+box(0.08, 0.16, 0.009, mat(0x111111, { roughness: 0.3 }), 0, 0, 0, phone);
+const qrCanvas = document.createElement('canvas'); qrCanvas.width = qrCanvas.height = 29;
+const qrTex = new THREE.CanvasTexture(qrCanvas); qrTex.magFilter = THREE.NearestFilter; qrTex.minFilter = THREE.NearestFilter; qrTex.generateMipmaps = false;
+const qrPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.07), new THREE.MeshBasicMaterial({ map: qrTex }));
+qrPlane.position.set(0, 0.02, 0.0051); phone.add(qrPlane);
+box(0.06, 0.05, 0.05, mat(0x444444), 0, -0.095, -0.03, phone);
+phone.position.set(0.1, 1.04, 0.18); phone.rotation.x = -0.25;
+function drawQR() {
+  const g = qrCanvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 29, 29);
+  g.fillStyle = '#000';
+  for (let r = 2; r < 27; r++) for (let c = 2; c < 27; c++) if (Math.random() < 0.5) g.fillRect(c, r, 1, 1);
+  for (const [x, y] of [[2, 2], [20, 2], [2, 20]]) {
+    g.fillStyle = '#000'; g.fillRect(x, y, 7, 7); g.fillStyle = '#fff'; g.fillRect(x + 1, y + 1, 5, 5);
+    g.fillStyle = '#000'; g.fillRect(x + 2, y + 2, 3, 3);
+  }
+  qrTex.needsUpdate = true;
+}
+drawQR();
+const phoneLabel = addLabel('GoPro Labs precision-time QR', '#9aa1ad', V(0.1, 1.15, 0.2), 0.34);
+
+// ---------- grippers ----------
+const TIP = V(0, -0.086, 0.22);            // camera optical center -> fingertip (pipeline constants)
+function makeGripper(color, tagL, tagR) {
+  const g = new THREE.Group();
+  const gc = mat(color, { roughness: 0.5 });
+  box(0.062, 0.045, 0.034, mat(0x1b1b1d, { roughness: 0.5 }), 0, 0, -0.02, g);     // GoPro
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.013, 0.008, 20), mat(0x050505, { roughness: 0.1 }));
+  lens.rotation.x = Math.PI / 2; lens.position.set(0.012, 0, 0.0); g.add(lens);
+  const recLed = new THREE.Mesh(new THREE.SphereGeometry(0.005, 10, 10), new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0x000000 }));
+  recLed.position.set(-0.02, 0.024, -0.01); g.add(recLed);
+  box(0.07, 0.03, 0.11, gc, 0, -0.07, -0.005, g);                                  // body
+  const handle = box(0.034, 0.13, 0.04, gc, 0, -0.13, -0.035, g); handle.rotation.x = 0.25;
+  box(0.012, 0.035, 0.02, mat(0x222222), 0, -0.1, 0.0, g);                          // trigger
+  box(0.13, 0.014, 0.03, mat(0x333333), 0, -0.086, 0.07, g);                        // rail
+  const fingers = [];
+  for (const [side, tid] of [[-1, tagL], [1, tagR]]) {
+    const f = new THREE.Group();
+    box(0.012, 0.03, 0.16, mat(0xe3e3e3, { roughness: 0.7 }), 0, 0, 0.08, f);
+    box(0.02, 0.035, 0.03, mat(0xcfcfcf), -side * 0.004, 0, 0.145, f);             // soft pad
+    const t = makeTag(tid, 0.016); t.position.set(0, 0.02, 0.012); f.add(t);
+    f.userData.tag = t;
+    f.position.set(side * 0.03, -0.086, 0.06);
+    g.add(f); fingers.push({ f, side });
+  }
+  // finger tags face the camera
+  g.updateMatrixWorld(true);
+  for (const { f } of fingers) f.userData.tag.lookAt(0, 0, 0);
+  const pipCam = new THREE.PerspectiveCamera(100, 4 / 3, 0.01, 30);
+  pipCam.rotation.y = Math.PI; pipCam.position.set(0.012, 0, 0.006);
+  g.add(pipCam);
+  scene.add(g);
+  return {
+    group: g, pipCam, recLed, fingers,
+    setWidth(w) { for (const { f, side } of fingers) f.position.x = side * (0.012 + w / 2); },
+  };
+}
+const GA = makeGripper(0xff9a3c, 0, 1);   // right, camera 0
+const GB = makeGripper(0x5b8cff, 6, 7);   // left, camera 1
+const lblA = label('A · right · cam 0', '#ff9a3c', 0.26); lblA.position.set(0, 0.06, 0); GA.group.add(lblA);
+const lblB = label('B · left · cam 1', '#5b8cff', 0.26); lblB.position.set(0, 0.06, 0); GB.group.add(lblB);
+labels.push(lblA, lblB);
+
+// person + head-mounted GoPro (non-gripper camera -> camera 2)
+const person = new THREE.Group(); scene.add(person);
+const skin = mat(0x6b7280, { roughness: 0.7 });
+const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.5, 6, 16), skin);
+torso.position.set(0.05, 1.12, 1.52); torso.castShadow = true; person.add(torso);
+const headM = new THREE.Mesh(new THREE.SphereGeometry(0.1, 24, 16), skin);
+headM.position.set(0.05, 1.63, 1.48); headM.castShadow = true; person.add(headM);
+const strap = new THREE.Mesh(new THREE.TorusGeometry(0.102, 0.008, 8, 32), mat(0x222222));
+strap.position.copy(headM.position); strap.rotation.x = Math.PI / 2 + 0.25; person.add(strap);
+const HC = (() => {
+  const g = new THREE.Group();
+  box(0.062, 0.045, 0.034, mat(0x1b1b1d, { roughness: 0.5 }), 0, 0, -0.02, g);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.013, 0.008, 20), mat(0x050505, { roughness: 0.1 }));
+  lens.rotation.x = Math.PI / 2; lens.position.set(0.012, 0, 0); g.add(lens);
+  const recLed = new THREE.Mesh(new THREE.SphereGeometry(0.005, 10, 10), new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0x000000 }));
+  recLed.position.set(-0.02, 0.024, -0.01); g.add(recLed);
+  const pipCam = new THREE.PerspectiveCamera(100, 4 / 3, 0.01, 30);
+  pipCam.rotation.y = Math.PI; pipCam.position.set(0.012, 0, 0.006); g.add(pipCam);
+  g.position.set(0.05, 1.7, 1.4); g.lookAt(0.05, 0.95, 0.35);
+  person.add(g);
+  return { group: g, pipCam, recLed };
+})();
+const lblC = label('Head cam · cam 2', '#b07cff', 0.26); lblC.position.set(0.05, 1.82, 1.45); person.add(lblC); labels.push(lblC);
+
+// ---------- keyframes ----------
+function basis(pos, look) {
+  const z = look.clone().sub(pos).normalize();
+  const x = new THREE.Vector3().crossVectors(UP, z).normalize();
+  const y = new THREE.Vector3().crossVectors(z, x);
+  return { x, y, z };
+}
+function tipOf(pos, look) {
+  const { y, z } = basis(pos, look);
+  return pos.clone().addScaledVector(y, TIP.y).addScaledVector(z, TIP.z);
+}
+function K(t, pos, look, w = 0.08) { return { t, pos: V(...pos), look: V(...look), w }; }
+function KT(t, tip, fwd, w = 0.08) {   // pose from desired fingertip + approach direction
+  const z = V(...fwd).normalize();
+  const x = new THREE.Vector3().crossVectors(UP, z).normalize();
+  const y = new THREE.Vector3().crossVectors(z, x);
+  const pos = V(...tip).addScaledVector(y, -TIP.y).addScaledVector(z, -TIP.z);
+  return { t, pos, look: pos.clone().add(z), w };
+}
+const ease = (u) => u * u * (3 - 2 * u);
+function evalTrack(keys, t) {
+  if (t <= keys[0].t) return keys[0];
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i], b = keys[i + 1];
+    if (t < b.t) {
+      const e = ease((t - a.t) / (b.t - a.t));
+      return { pos: a.pos.clone().lerp(b.pos, e), look: a.look.clone().lerp(b.look, e), w: a.w + (b.w - a.w) * e };
+    }
+  }
+  return keys[keys.length - 1];
+}
+const REST_A = [[0.5, 1.3, 1.1], [0.4, 0.9, 0.4]];
+const REST_B = [[-0.4, 1.3, 1.1], [-0.3, 0.9, 0.4]];
+const rest = (t, R, w = 0.08) => K(t, R[0], R[1], w);
+const TAG13 = [-0.5, 0.9425, 0.33];
+
+const STEPS = [
+  {
+    id: 'setup', title: '1 · Prepare the kitchen', dur: 14,
+    view: { pos: [1.9, 2.0, 3.0], target: [-0.3, 1.1, 0.3] }, pip: 'A', showBad: true, showPerson: true,
+    body: `<ul>
+      <li>Lights on, blinds closed, nobody else in view</li>
+      <li>Matte mat on the work area — the counter is glossy</li>
+      <li><b>Tag 13</b> (16 cm) flat on the counter, face up, beside the work area</li>
+      <li>Environment tags (10 cm) only on surfaces that never move: backsplash <b>14, 15, 20</b>, side wall <b>21</b>, fridge side panel <b>16</b></li>
+      <li>Never on doors, drawers, appliance doors or task objects</li>
+      <li>Same scene for mapping and all demos — don't move anything</li></ul>
+      <h3>aruco_config.yaml</h3>
+<pre>marker_size_map:
+  default: 0.16
+  0: 0.016   1: 0.016   # gripper A fingers
+  6: 0.016   7: 0.016   # gripper B fingers
+  13: 0.16              # world tag
+  14: 0.10   15: 0.10   16: 0.10
+  20: 0.10   21: 0.10</pre>
+      <div class="muted">Environment IDs avoid 0–11 (grippers) and never use both IDs of a 6k / 6k+1 pair.</div>`,
+    A: [rest(0, REST_A)], B: [rest(0, REST_B)], recA: [], recB: [],
+    captions: [[0, 'Set up the kitchen once, before any recording'], [5, 'Green: environment tags on static surfaces'], [10, 'Red: never on doors or drawers']],
+  },
+  {
+    id: 'sync', title: '2 · Time sync', dur: 16,
+    view: { pos: [1.5, 1.7, 2.3], target: [0.1, 1.2, 0.8] }, pip: (t) => (t < 6 ? 'A' : t < 11 ? 'B' : 'C'), showPhone: true, showPerson: true,
+    phone: [[0, [0.1, 1.04, 0.18], -0.25], [11, [0.1, 1.04, 0.18], -0.25], [12, [0.07, 1.6, 1.1], 0.0], [14, [0.07, 1.6, 1.1], 0.0], [15, [0.6, 0.6, 1.4], 0.0]],
+    body: `<ul>
+      <li>Phone shows the GoPro Labs precision-time QR (updates live)</li>
+      <li>Scan with <b>A</b>, <b>B</b> and the <b>head cam</b>, camera idle (not recording)</li>
+      <li>Once per session — not after each recording. Again only after a battery swap or power loss</li>
+      <li>Put the phone away: a changing screen must not appear in mapping or demos</li></ul>`,
+    A: [rest(0, REST_A), K(1.5, [0.2, 1.17, 0.62], [0.1, 1.04, 0.18]), K(4.5, [0.2, 1.17, 0.62], [0.1, 1.04, 0.18]), rest(6, REST_A)],
+    B: [rest(0, REST_B), rest(6, REST_B), K(7.5, [0.0, 1.17, 0.62], [0.1, 1.04, 0.18]), K(10.5, [0.0, 1.17, 0.62], [0.1, 1.04, 0.18]), rest(12, REST_B)],
+    recA: [], recB: [],
+    captions: [[0, 'Gripper A scans the live QR code (not recording)'], [6, 'Then gripper B scans the same QR code'],
+      [11, 'Then the head cam'], [14.5, 'Phone away — out of every recording']],
+  },
+  {
+    id: 'cal', title: '3 · Gripper calibration', dur: 14,
+    view: { pos: [1.2, 1.55, 2.1], target: [0.05, 1.15, 0.7] }, pip: (t) => (t < 7 ? 'A' : 'B'),
+    body: `<ul>
+      <li>One video per gripper camera</li>
+      <li>Fully close ↔ fully open, about 5 times</li>
+      <li>Both finger tags visible the whole time (≥ 80 % of frames)</li>
+      <li>Save in <code>raw_videos/gripper_calibration/</code></li></ul>`,
+    A: (() => { const k = [K(0, [0.25, 1.32, 0.95], [0.25, 1.0, 0.35])]; for (let i = 0; i < 5; i++) { k.push(K(0.6 + i * 1.2, [0.25, 1.32, 0.95], [0.25, 1.0, 0.35], 0.0)); k.push(K(1.2 + i * 1.2, [0.25, 1.32, 0.95], [0.25, 1.0, 0.35], 0.085)); } k.push(rest(7.5, REST_A)); return k; })(),
+    B: (() => { const k = [rest(0, REST_B), rest(7, REST_B), K(7.6, [-0.1, 1.32, 0.95], [-0.1, 1.0, 0.35])]; for (let i = 0; i < 5; i++) { k.push(K(8.0 + i * 1.1, [-0.1, 1.32, 0.95], [-0.1, 1.0, 0.35], 0.0)); k.push(K(8.55 + i * 1.1, [-0.1, 1.32, 0.95], [-0.1, 1.0, 0.35], 0.085)); } return k; })(),
+    recA: [[0, 7]], recB: [[7.5, 14]],
+    captions: [[0, 'Record A: close fully, open fully, ×5'], [7.5, 'Record B: same, finger tags 6 and 7']],
+  },
+  {
+    id: 'map', title: '4 · Mapping video (~60 s)', dur: 60,
+    view: { pos: [0.4, 2.7, 3.5], target: [-0.3, 1.0, 0.3] }, pip: 'A', trail: true,
+    body: `<ul>
+      <li>One gripper camera (A), slow and smooth, ~60 s</li>
+      <li>Start and end on tag 13 — wait for the green check</li>
+      <li>Sweep sink, backsplash, side wall, stove, fridge side</li>
+      <li>Return to tag 13 in the middle</li>
+      <li>Finish with task-height passes over the mat</li>
+      <li>Rename the file to <code>mapping.mp4</code></li></ul>`,
+    A: [K(0, [-0.5, 1.6, 0.95], TAG13), K(4, [-0.5, 1.6, 0.95], TAG13),
+        K(10, [-1.2, 1.45, 1.05], [-1.0, 0.85, 0.3]), K(16, [-1.55, 1.35, 1.0], [-1.5, 1.2, 0.0]),
+        K(21, [-1.35, 1.4, 1.15], [-2.0, 1.25, 0.3]), K(27, [-0.5, 1.55, 0.95], TAG13), K(29, [-0.5, 1.55, 0.95], TAG13),
+        K(34, [-0.05, 1.3, 1.0], [-0.25, 1.2, 0.0]), K(39, [0.55, 1.35, 1.05], [0.9, 0.95, 0.3]),
+        K(45, [0.75, 1.4, 1.0], [1.25, 1.35, 0.42]), K(50, [0.3, 1.15, 0.78], [0.35, 0.94, 0.38]),
+        K(54, [-0.05, 1.12, 0.74], [-0.05, 0.94, 0.33]), K(58, [-0.5, 1.5, 0.92], TAG13), K(60, [-0.5, 1.5, 0.92], TAG13)],
+    B: [rest(0, REST_B)], recA: [[0, 60]], recB: [],
+    captions: [[0, 'Start on tag 13 — hold 3–4 s'], [4, 'Sweep the sink area slowly'], [11, 'Backsplash and tag 14'],
+      [17, 'Side wall and tag 21'], [22, 'Back to tag 13'], [30, 'Backsplash, tag 15'], [35, 'Stove (tag 20 on the backsplash)'],
+      [40, 'Fridge side panel, tag 16'], [46, 'Task height over the mat: mug'], [51, 'Task height: plate'], [55, 'End on tag 13']],
+  },
+  {
+    id: 'demo', title: '5 · Bimanual demo', dur: 12,
+    view: { pos: [0.85, 1.6, 1.7], target: [0.1, 0.98, 0.4] }, pip: (t) => (t < 5.5 ? 'B' : 'A'), demo: true,
+    body: `<ul>
+      <li>Start the <b>head cam first</b>, then A and B; hold 1 s</li>
+      <li>B slides the plate into place; A places the mug on it</li>
+      <li>Hold 1 s, stop A and B, then the head cam. Stopping = episode done</li>
+      <li>Keep looking at the mapped work area; move smoothly</li>
+      <li>Reset: new plate / mug positions, new start poses</li>
+      <li>~50 demos per kitchen, then process before leaving</li></ul>`,
+    A: [rest(0, REST_A), rest(1, REST_A),
+        KT(2.2, [0.35, 1.0, 0.53], [0, -0.35, -0.94]), KT(3.2, [0.35, 0.987, 0.435], [0, -0.35, -0.94]),
+        KT(3.7, [0.35, 0.987, 0.435], [0, -0.35, -0.94], 0.066), KT(4.8, [0.35, 1.13, 0.45], [0, -0.45, -0.9], 0.066),
+        KT(6.8, [0.11, 1.12, 0.37], [0, -0.45, -0.9], 0.066), KT(7.8, [0.11, 1.002, 0.36], [0, -0.35, -0.94], 0.066),
+        KT(8.3, [0.11, 1.002, 0.36], [0, -0.35, -0.94], 0.085), KT(9.3, [0.11, 1.07, 0.5], [0, -0.45, -0.9]),
+        rest(10.6, REST_A), rest(12, REST_A)],
+    B: [rest(0, REST_B), rest(1, REST_B),
+        KT(2.6, [-0.16, 1.03, 0.36], [0, -0.8, -0.6]), KT(3.2, [-0.165, 0.958, 0.34], [0, -0.8, -0.6]),
+        KT(3.6, [-0.165, 0.958, 0.34], [0, -0.8, -0.6], 0.02), KT(5.0, [-0.005, 0.958, 0.34], [0, -0.8, -0.6], 0.02),
+        KT(5.4, [-0.005, 0.958, 0.34], [0, -0.8, -0.6], 0.08), KT(6.4, [-0.05, 1.08, 0.48], [0, -0.7, -0.7]),
+        rest(7.4, REST_B), rest(12, REST_B)],
+    attach: [{ obj: 'plate', g: 'B', t0: 3.6, t1: 5.4, keepY: true }, { obj: 'mug', g: 'A', t0: 3.7, t1: 8.3 }],
+    recA: [[0.5, 11.5]], recB: [[0.5, 11.5]], recC: [[0, 12]], showPerson: true,
+    captions: [[0, 'Head cam starts first'], [0.5, 'Start A and B — hold still 1 s'], [1, 'B grips the plate rim'], [3.6, 'B slides the plate into place'],
+      [5.4, 'A carries the mug over'], [7.8, 'A places the mug on the plate'], [8.3, 'Release and retract'],
+      [10.6, 'Hold 1 s, then stop A and B'], [11.5, 'Stop the head cam last — episode done']],
+  },
+];
+for (const s of STEPS) s.captions.sort((a, b) => a[0] - b[0]);
+
+// ---------- attachments ----------
+const objects = { plate: { mesh: plate, p0: PLATE0 }, mug: { mesh: mug, p0: MUG0 } };
+const grippers = { A: GA, B: GB };
+const cams = { A: GA, B: GB, C: HC };
+function tipAt(step, gName, t) { const p = evalTrack(step[gName], t); return tipOf(p.pos, p.look); }
+function updateObjects(step, t) {
+  resetObjects();
+  if (!step.attach) return;
+  for (const a of step.attach) {
+    const o = objects[a.obj];
+    if (t < a.t0) continue;
+    const off = o.p0.clone().sub(tipAt(step, a.g, a.t0));
+    const p = tipAt(step, a.g, Math.min(t, a.t1)).add(off);
+    if (a.keepY) p.y = o.p0.y;
+    o.mesh.position.copy(p);
+  }
+}
+
+// ---------- mapping trail ----------
+const TRAIL_N = 400;
+const trailGeom = new THREE.BufferGeometry();
+trailGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 3), 3));
+const trail = new THREE.Line(trailGeom, new THREE.LineBasicMaterial({ color: 0xff9a3c }));
+trail.layers.set(LABEL_LAYER); trail.frustumCulled = false; scene.add(trail);
+const mapStep = STEPS.find((s) => s.id === 'map');
+{
+  const arr = trailGeom.attributes.position.array;
+  for (let i = 0; i < TRAIL_N; i++) {
+    const p = evalTrack(mapStep.A, (i / (TRAIL_N - 1)) * mapStep.dur).pos;
+    arr.set([p.x, p.y, p.z], i * 3);
+  }
+  trailGeom.attributes.position.needsUpdate = true;
+}
+
+// ---------- UI ----------
+const stepsEl = document.getElementById('steps');
+const bars = [];
+STEPS.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.innerHTML = `${s.title}<span class="bar"><i></i></span>`;
+  b.onclick = () => goStep(i, true);
+  stepsEl.appendChild(b); bars.push(b);
+});
+const $ = (id) => document.getElementById(id);
+let stepIdx = 0, t = 0, playing = true, speed = 1, endHold = 0;
+let camTween = null;
+$('btnPlay').onclick = () => { playing = !playing; $('btnPlay').textContent = playing ? '❚❚ Pause' : '▶ Play'; };
+$('btnRestart').onclick = () => goStep(stepIdx, false);
+$('speed').onchange = (e) => (speed = parseFloat(e.target.value));
+$('chkLabels').onchange = (e) => labels.forEach((l) => (l.visible = e.target.checked));
+
+function goStep(i, moveCam = true) {
+  stepIdx = i; t = 0; endHold = 0;
+  const s = STEPS[i];
+  bars.forEach((b, j) => b.classList.toggle('on', j === i));
+  $('stepBody').innerHTML = s.body;
+  badGroup.visible = !!s.showBad;
+  phone.visible = !!s.showPhone; phoneLabel.visible = !!s.showPhone && $('chkLabels').checked;
+  person.visible = !!s.showPerson;
+  trail.visible = !!s.trail;
+  if (moveCam) camTween = { t: 0, fromP: cam.position.clone(), fromT: controls.target.clone(), toP: V(...s.view.pos), toT: V(...s.view.target) };
+  resetObjects();
+}
+
+// ---------- per-frame update ----------
+const inRec = (ranges, tt) => ranges.some(([a, b]) => tt >= a && tt < b);
+const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function currentPipName(s) {
+  const sel = $('pipSel').value;
+  if (sel !== 'auto') return sel;
+  return typeof s.pip === 'function' ? s.pip(t) : s.pip;
+}
+function update() {
+  const s = STEPS[stepIdx];
+  for (const [name, g] of Object.entries(grippers)) {
+    const p = evalTrack(s[name], t);
+    g.group.position.copy(p.pos); g.group.lookAt(p.look); g.setWidth(p.w);
+    const rec = inRec(s['rec' + name], t);
+    g.recLed.material.emissive.setHex(rec && Math.floor(performance.now() / 400) % 2 === 0 ? 0xff2a1a : 0x000000);
+    const chip = $('chip' + name);
+    chip.textContent = `${name} ${rec ? 'REC' : 'idle'}`;
+    chip.classList.toggle('rec', rec);
+  }
+  const recC = inRec(s.recC || [], t);
+  HC.recLed.material.emissive.setHex(recC && Math.floor(performance.now() / 400) % 2 === 0 ? 0xff2a1a : 0x000000);
+  $('chipC').textContent = `Head ${recC ? 'REC' : 'idle'}`; $('chipC').classList.toggle('rec', recC);
+  if (s.phone) {
+    const k = s.phone; let a = k[0], b = k[k.length - 1];
+    for (let i = 0; i < k.length - 1; i++) if (t >= k[i][0] && t < k[i + 1][0]) { a = k[i]; b = k[i + 1]; break; }
+    const e = b[0] > a[0] ? ease(Math.min(1, Math.max(0, (t - a[0]) / (b[0] - a[0])))) : 1;
+    phone.position.lerpVectors(V(...a[1]), V(...b[1]), e); phone.rotation.x = a[2] + (b[2] - a[2]) * e;
+    phoneLabel.position.copy(phone.position).add(V(0, 0.11, 0.02));
+  }
+  updateObjects(s, t);
+  if (s.trail) trailGeom.setDrawRange(0, Math.max(2, Math.floor((t / s.dur) * (TRAIL_N - 1)) + 1));
+  if (s.showPhone && Math.floor(t * 4) !== update.lastQR) { update.lastQR = Math.floor(t * 4); drawQR(); }
+  let cap = '';
+  for (const [ct, text] of s.captions) if (t >= ct) cap = text;
+  $('caption').textContent = cap;
+  $('chipTime').textContent = `${s.title.split('·')[0].trim()} · ${fmt(t)} / ${fmt(s.dur)}`;
+  bars.forEach((b, j) => (b.querySelector('i').style.width = j < stepIdx ? '100%' : j === stepIdx ? `${(t / s.dur) * 100}%` : '0%'));
+}
+
+// ---------- camera view overlay (tag checks) ----------
+const pipCanvas = $('pip'), pctx = pipCanvas.getContext('2d');
+const tmp = new THREE.Vector3();
+function drawOverlay(g, gName) {
+  const W = pipCanvas.width, H = pipCanvas.height;
+  pctx.clearRect(0, 0, W, H);
+  const pc = g.pipCam; pc.updateMatrixWorld();
+  const camPos = pc.getWorldPosition(new THREE.Vector3());
+  // valid zone for tag 13: radius 0.6 * half height
+  pctx.setLineDash([6, 5]); pctx.lineWidth = 1.5; pctx.strokeStyle = 'rgba(76,194,131,.8)';
+  pctx.beginPath(); pctx.arc(W / 2, H / 2, 0.6 * H / 2, 0, Math.PI * 2); pctx.stroke(); pctx.setLineDash([]);
+  const visible = [];
+  let t13 = null;
+  for (const [id, tg] of Object.entries(tags)) {
+    const c = tg.mesh.getWorldPosition(tmp.clone());
+    const toCam = camPos.clone().sub(c);
+    const dist = toCam.length();
+    const facing = tg.normal.dot(toCam.normalize()) > 0.15;
+    const ndc = c.clone().project(pc);
+    const inside = ndc.z < 1 && Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1;
+    if (inside && facing && dist < 3) visible.push(id);
+    if (id === '13') {
+      const px = (ndc.x + 1) / 2 * W, py = (1 - ndc.y) / 2 * H;
+      const r = Math.hypot(px - W / 2, py - H / 2) / (H / 2);
+      t13 = { inside: inside && facing, px, py, r, dist, ok: inside && facing && r <= 0.6 && dist >= 0.3 && dist <= 2 };
+    }
+  }
+  if (t13 && t13.inside) {
+    pctx.strokeStyle = t13.ok ? '#4cc283' : '#f07267'; pctx.lineWidth = 2;
+    pctx.beginPath(); pctx.arc(t13.px, t13.py, 12, 0, Math.PI * 2); pctx.stroke();
+  }
+  // status box
+  pctx.fillStyle = 'rgba(17,19,23,.75)'; pctx.fillRect(8, 8, 186, 44);
+  pctx.font = '600 12px -apple-system, Segoe UI, sans-serif';
+  if (t13 && t13.inside) {
+    pctx.fillStyle = t13.ok ? '#4cc283' : '#f5c542';
+    pctx.fillText(`${t13.ok ? '✓' : '•'} tag 13  ${t13.dist.toFixed(2)} m  r=${t13.r.toFixed(2)}`, 14, 25);
+    pctx.fillStyle = '#9aa1ad'; pctx.font = '11px -apple-system, Segoe UI, sans-serif';
+    pctx.fillText(t13.ok ? 'counts for world frame' : 'need 0.3–2 m and r ≤ 0.6', 14, 42);
+  } else {
+    pctx.fillStyle = '#9aa1ad'; pctx.fillText('tag 13 not in view', 14, 25);
+    pctx.font = '11px -apple-system, Segoe UI, sans-serif'; pctx.fillText('fine during demos', 14, 42);
+  }
+  const s = STEPS[stepIdx];
+  if (inRec(s['rec' + gName] || [], t)) {
+    pctx.fillStyle = 'rgba(17,19,23,.75)'; pctx.fillRect(W - 92, 8, 84, 22);
+    pctx.fillStyle = '#ff4d40'; pctx.font = '600 12px -apple-system, Segoe UI, sans-serif'; pctx.fillText('● REC', W - 84, 24);
+  }
+  $('pipName').textContent = gName === 'C' ? 'Camera view · head cam' : `Camera view · gripper ${gName} (${gName === 'A' ? 'right' : 'left'})`;
+  $('pipTags').textContent = visible.length ? `tags in view: ${visible.join(', ')}` : 'no env tags in view';
+}
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const s = STEPS[stepIdx];
+  if (playing) {
+    t += dt * speed;
+    if (t >= s.dur) {
+      t = s.dur; endHold += dt;
+      if ($('chkAuto').checked && endHold > 1.5) goStep((stepIdx + 1) % STEPS.length, true);
+    }
+  }
+  if (camTween) {
+    camTween.t = Math.min(1, camTween.t + dt / 1.2);
+    const e = ease(camTween.t);
+    cam.position.lerpVectors(camTween.fromP, camTween.toP, e);
+    controls.target.lerpVectors(camTween.fromT, camTween.toT, e);
+    if (camTween.t >= 1) camTween = null;
+  }
+  update();
+  controls.update();
+
+  const W = innerWidth, H = innerHeight;
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, W, H);
+  renderer.render(scene, cam);
+
+  const gName = currentPipName(s), g = cams[gName];
+  const r = $('pip').getBoundingClientRect();
+  renderer.setScissorTest(true);
+  renderer.setViewport(r.left, H - r.bottom, r.width, r.height);
+  renderer.setScissor(r.left, H - r.bottom, r.width, r.height);
+  renderer.render(scene, g.pipCam);
+  renderer.setScissorTest(false);
+  drawOverlay(g, gName);
+  requestAnimationFrame(frame);
+}
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
+});
+// deep link: #step=4&t=20 (1-based step, seconds, paused)
+{
+  const h = new URLSearchParams(location.hash.slice(1));
+  goStep(h.has('step') ? Math.max(0, Math.min(STEPS.length - 1, parseInt(h.get('step')) - 1)) : 0, false);
+  const s0 = STEPS[stepIdx];
+  cam.position.set(...s0.view.pos); controls.target.set(...s0.view.target);
+  if (h.has('t')) { t = parseFloat(h.get('t')); playing = false; $('btnPlay').textContent = '▶ Play'; }
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

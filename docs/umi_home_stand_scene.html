@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMI · Continuous take with a home stand</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111317; color: #e6e8eb;
+               font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #app canvas { display: block; }
+  #panel { position: absolute; left: 14px; top: 14px; bottom: 96px; width: 340px; box-sizing: border-box;
+           background: rgba(20,22,27,.94); border: 1px solid #2e3239; border-radius: 12px;
+           padding: 14px 16px; overflow-y: auto; z-index: 2; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  h3 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #9aa1ad; margin: 14px 0 4px; }
+  .muted { color: #9aa1ad; }
+  ul { padding-left: 16px; margin: 6px 0 10px; } li { margin: 3px 0; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: #c7d2fe; }
+  .ctrl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .ctrl button, .ctrl select { background: #1d2026; color: #e6e8eb; border: 1px solid #2e3239;
+       border-radius: 7px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .ctrl label { color: #9aa1ad; display: flex; gap: 5px; align-items: center; }
+  .legend { display: grid; grid-template-columns: 14px 1fr; gap: 4px 8px; align-items: center; font-size: 12px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 4px; }
+  td, th { border-bottom: 1px solid #2e3239; padding: 3px 4px; text-align: left; }
+  th { color: #9aa1ad; font-weight: 500; }
+  #pip { position: absolute; right: 14px; bottom: 96px; width: 400px; height: 300px;
+         border: 2px solid #3a3f48; border-radius: 8px; pointer-events: none; box-sizing: border-box; z-index: 2; }
+  #pipLabel { position: absolute; right: 14px; bottom: 400px; width: 400px; font-size: 12px; color: #9aa1ad;
+              pointer-events: none; z-index: 2; }
+  #hud { position: absolute; right: 14px; top: 14px; display: flex; gap: 6px; pointer-events: none; z-index: 2; }
+  .chip { background: rgba(20,22,27,.9); border: 1px solid #2e3239; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  .chip.rec { border-color: #f07267; color: #ffb3ad; }
+  .chip.rec::before { content: "● "; color: #ff4d40; }
+  #state.home { border-color: #8b93a1; } #state.ep { border-color: #4ade80; color: #bbf7d0; }
+  #state.bad { border-color: #f87171; color: #fecaca; }
+  #caption { position: absolute; left: 50%; transform: translateX(-50%); top: 14px; max-width: 520px;
+             text-align: center; font-size: 15px; font-weight: 600; z-index: 2;
+             background: rgba(20,22,27,.9); border: 1px solid #2e3239; border-radius: 10px; padding: 7px 14px;
+             pointer-events: none; }
+  #timeline { position: absolute; left: 14px; right: 14px; bottom: 14px; height: 70px; box-sizing: border-box;
+              background: rgba(20,22,27,.94); border: 1px solid #2e3239; border-radius: 12px; padding: 8px 12px; z-index: 2; }
+  #tlTitle { font-size: 11px; color: #9aa1ad; letter-spacing: .05em; text-transform: uppercase; display: flex; justify-content: space-between; }
+  #tlBar { position: relative; height: 26px; margin-top: 6px; border-radius: 6px; overflow: hidden; cursor: pointer; background: #1d2026; }
+  .seg { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center;
+         font-size: 11px; color: #0b0c0e; font-weight: 600; white-space: nowrap; overflow: hidden; border-right: 1px solid #111317; }
+  #tlCursor { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff; pointer-events: none; }
+  .tick { position: absolute; top: 0; bottom: 0; width: 2px; background: #fbbf24; pointer-events: none; }
+  .lbl { font-size: 11px; color: #e6e8eb; background: rgba(17,19,23,.82); border: 1px solid #3a3f48;
+         border-radius: 6px; padding: 1px 6px; white-space: nowrap; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="panel">
+  <h1>Continuous take with a home stand</h1>
+  <div class="muted">Task: put the mug in the sink. Cameras keep recording; boundaries are detected. Drag to orbit, scroll to zoom, click the timeline to seek.</div>
+
+  <div class="ctrl">
+    <button id="btnPlay">❚❚ Pause</button>
+    <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+    <label><input type="checkbox" id="chkLabels" checked> labels</label>
+    <label><input type="checkbox" id="chkFrustum" checked> head view cone</label>
+  </div>
+
+  <h3>Episode boundaries</h3>
+  <ul>
+    <li><b>Home:</b> both cubes within ~3 cm / 15° of their docked pose and still ≥ 0.5 s → idle.</li>
+    <li><b>Knock</b> the grippers together → audio sync point + episode start.</li>
+    <li><b>Back on the stand</b> and still → episode ends.</li>
+    <li><b>Reset by hand</b> with grippers docked → stays idle, not recorded as an episode.</li>
+    <li><b>Failure:</b> show <b>card 24</b> to the head camera → episode discarded.</li>
+  </ul>
+
+  <h3>Home stand</h3>
+  <ul>
+    <li>Base ~35 × 15 cm, fixed to the counter for the session.</li>
+    <li>Two cradles: grippers drop in at the same pose every time (left on the left).</li>
+    <li>Tags <b>30 / 31 / 36</b> (8 cm) on a strip tilted ~45° toward the head, behind the cradles so docked grippers don't hide them.</li>
+    <li>Tags are part of the <code>environment</code> body: they also add a second, tilted plane to the world frame.</li>
+  </ul>
+
+  <h3>Legend</h3>
+  <div class="legend">
+    <div class="sw" style="background:#60a5fa"></div><div>Right gripper = robot0 (cube tags 8–11)</div>
+    <div class="sw" style="background:#f59e0b"></div><div>Left gripper = robot1 (cube tags 2–5)</div>
+    <div class="sw" style="background:#e5e7eb"></div><div>Environment tags (counter, wall, stand)</div>
+    <div class="sw" style="background:#4ade80"></div><div>Home zone: cube docked and still</div>
+    <div class="sw" style="background:#fbbf24"></div><div>Knock: sync point + start</div>
+  </div>
+
+  <h3>What the segmentation outputs</h3>
+  <table>
+    <tr><th>Segment</th><th>Time</th><th>Result</th></tr>
+    <tr><td>Episode 1</td><td>3.4–14.0 s</td><td style="color:#4ade80">kept</td></tr>
+    <tr><td>Reset</td><td>14.0–21.4 s</td><td class="muted">idle</td></tr>
+    <tr><td>Episode 2</td><td>21.4–28.0 s</td><td style="color:#f87171">discarded (card 24)</td></tr>
+  </table>
+  <p class="muted" style="font-size:12px">Tag patterns are stylized, not real DICT_4X4_50 codes. Sizes and distances are roughly to scale.</p>
+</div>
+
+<div id="hud"><span class="chip rec">REC · one continuous take</span><span class="chip" id="state">HOME</span><span class="chip" id="clock">0.0 s</span></div>
+<div id="caption"></div>
+<div id="pipLabel">Head GoPro view (what tag tracking sees)</div>
+<div id="pip"></div>
+
+<div id="timeline">
+  <div id="tlTitle"><span>Detected segments in the take</span><span class="muted">yellow ticks = knocks</span></div>
+  <div id="tlBar"><div id="tlCursor"></div></div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ---------- renderer / scene ----------
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+app.appendChild(renderer.domElement);
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+Object.assign(labelRenderer.domElement.style, { position: 'absolute', top: '0', pointerEvents: 'none' });
+app.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d23);
+const cam = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 20);
+cam.position.set(1.3, 1.45, 0.55);
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.target.set(-0.1, 0.97, -0.02);
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(0.8, 2.5, 1.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -1.2, right: 1.2, top: 1.2, bottom: -1.2 });
+scene.add(sun);
+
+const labels = [];
+function label(obj, text, offset = [0, 0, 0]) {
+  const div = document.createElement('div');
+  div.className = 'lbl';
+  div.textContent = text;
+  const l = new CSS2DObject(div);
+  l.position.set(...offset);
+  obj.add(l);
+  labels.push(l);
+  return l;
+}
+
+// ---------- stylized ArUco tag texture ----------
+function tagTexture(id) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 120;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, 120, 120);
+  g.fillStyle = '#000'; g.fillRect(10, 10, 100, 100);
+  let s = id * 9301 + 49297;
+  const rnd = () => (s = (s * 233280 + 49297) % 1000003) / 1000003;
+  for (let r = 0; r < 4; r++) for (let q = 0; q < 4; q++)
+    if (rnd() > 0.5) { g.fillStyle = '#fff'; g.fillRect(26.7 + q * 16.7, 26.7 + r * 16.7, 16.7, 16.7); }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.NearestFilter;
+  return t;
+}
+function tagMesh(id, size) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+    new THREE.MeshStandardMaterial({ map: tagTexture(id), roughness: 0.9 }));
+  return m;
+}
+
+// ---------- kitchen ----------
+const TOP = 0.9;
+const counterMat = new THREE.MeshStandardMaterial({ color: 0x8b8378, roughness: 0.85 });
+function box(w, h, d, mat, x, y, z, parent = scene) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+// counter top with a sink hole: x [-0.8, 0.85], z [-0.35, 0.3], hole x [0.32, 0.68], z [-0.22, 0.12]
+box(1.12, 0.04, 0.65, counterMat, -0.24, TOP - 0.02, -0.025);
+box(0.17, 0.04, 0.65, counterMat, 0.765, TOP - 0.02, -0.025);
+box(0.36, 0.04, 0.18, counterMat, 0.5, TOP - 0.02, 0.21);
+box(0.36, 0.04, 0.13, counterMat, 0.5, TOP - 0.02, -0.285);
+box(1.65, 0.86, 0.6, new THREE.MeshStandardMaterial({ color: 0x3f4652, roughness: 0.9 }), 0.025, 0.43, -0.05);
+const basin = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.2, 0.34),
+  new THREE.MeshStandardMaterial({ color: 0xb8c0cc, metalness: 0.5, roughness: 0.35, side: THREE.BackSide }));
+basin.position.set(0.5, TOP - 0.1, -0.05); scene.add(basin);
+const wall = box(1.65, 1.1, 0.02, new THREE.MeshStandardMaterial({ color: 0xd9d4ca, roughness: 0.95 }), 0.025, TOP + 0.55, -0.36);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshStandardMaterial({ color: 0x23272e }));
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+const sinkAnchor = new THREE.Object3D(); sinkAnchor.position.set(0.5, TOP + 0.02, -0.05); scene.add(sinkAnchor);
+label(sinkAnchor, 'Sink', [0, 0.05, 0]);
+
+// environment tags: counter (flat) and wall
+const counterTags = [[13, 0.16, -0.62, -0.17], [44, 0.08, -0.1, -0.27], [45, 0.08, 0.2, -0.26], [46, 0.08, -0.62, 0.17], [47, 0.08, 0.76, 0.15]];
+counterTags.forEach(([id, s, x, z]) => {
+  const t = tagMesh(id, s); t.rotation.x = -Math.PI / 2; t.position.set(x, TOP + 0.001, z); scene.add(t);
+});
+{ const a = new THREE.Object3D(); a.position.set(0.05, TOP, -0.27); scene.add(a); label(a, 'Env tags on counter (44–47)', [0, 0.04, 0]); }
+{ const a = new THREE.Object3D(); a.position.set(-0.62, TOP, -0.17); scene.add(a); label(a, 'Tag 13 · 16 cm', [0, 0.05, 0]); }
+const wallTags = [[14, -0.5, 1.12], [15, -0.15, 1.25], [16, 0.2, 1.12], [17, 0.55, 1.25]];
+wallTags.forEach(([id, x, y]) => { const t = tagMesh(id, 0.08); t.position.set(x, y, -0.349); scene.add(t); });
+{ const a = new THREE.Object3D(); a.position.set(0.02, 1.36, -0.34); scene.add(a); label(a, 'Env tags on wall (14–17): second plane'); }
+
+// ---------- home stand ----------
+const stand = new THREE.Group(); stand.position.set(-0.31, TOP, 0.09); scene.add(stand);
+const standMat = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.7 });
+box(0.38, 0.015, 0.2, standMat, 0, 0.0075, 0, stand);
+// tilted tag strip at the back, facing the operator / head camera
+const strip = new THREE.Group(); strip.position.set(0, 0.035, -0.085); strip.rotation.x = -Math.PI / 4; stand.add(strip);
+box(0.38, 0.1, 0.01, standMat, 0, 0, -0.006, strip);
+[[30, -0.12], [31, 0], [36, 0.12]].forEach(([id, x]) => { const t = tagMesh(id, 0.08); t.position.set(x, 0, 0.0); strip.add(t); });
+box(0.38, 0.05, 0.03, standMat, 0, 0.025, -0.1, stand);
+// cradles (V-blocks)
+const cradleMat = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.6 });
+[-0.1, 0.1].forEach(x => {
+  box(0.012, 0.035, 0.12, cradleMat, x - 0.03, 0.03, 0.02, stand);
+  box(0.012, 0.035, 0.12, cradleMat, x + 0.03, 0.03, 0.02, stand);
+});
+label(stand, 'Home stand · tags 30 / 31 / 36', [0, -0.03, 0.13]);
+
+// ---------- grippers ----------
+// local frame: origin = TCP (between fingertips), forward = -z, up = +y
+const DOCK = { R: new THREE.Vector3(-0.21, TOP + 0.05, 0.07), L: new THREE.Vector3(-0.41, TOP + 0.05, 0.07) };
+const CUBE_OFFSET = new THREE.Vector3(0, 0.05, 0.17);
+function makeGripper(color, cubeTags, name) {
+  const g = new THREE.Group();
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.6 });
+  const body = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
+  const fingers = [-1, 1].map(s => {
+    const f = box(0.012, 0.025, 0.06, dark, 0, 0, 0.03, g);
+    const ft = tagMesh(s < 0 ? 0 : 1, 0.016); ft.material = ft.material.clone();
+    ft.material.color.set(0xffffff); ft.position.set(0, 0.0131, 0.0); ft.rotation.x = -Math.PI / 2; f.add(ft);
+    return f;
+  });
+  box(0.12, 0.035, 0.03, body, 0, 0, 0.075, g);              // palm
+  box(0.065, 0.045, 0.035, dark, 0, 0.035, 0.105, g);        // GoPro
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.01, 20), new THREE.MeshStandardMaterial({ color: 0x0b0b0b }));
+  lens.rotation.x = Math.PI / 2; lens.position.set(0, 0.035, 0.085); g.add(lens);
+  box(0.035, 0.11, 0.035, body, 0, -0.065, 0.12, g);         // handle
+  box(0.012, 0.012, 0.07, body, 0, 0.03, 0.15, g);           // cube post
+  const faces = [cubeTags[0], cubeTags[1], cubeTags[2], null, cubeTags[3], null]
+    .map(id => id == null ? new THREE.MeshStandardMaterial({ color: 0xf5f5f5 }) : new THREE.MeshStandardMaterial({ map: tagTexture(id) }));
+  const cube = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), faces);
+  cube.position.copy(CUBE_OFFSET); cube.castShadow = true; g.add(cube);
+  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(cube.geometry), new THREE.LineBasicMaterial({ color }));
+  cube.add(edge);
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  label(g, name, [0, 0.13, 0.17]);
+  scene.add(g);
+  return { g, fingers, cube };
+}
+const R = makeGripper(0x60a5fa, [8, 9, 10, 11], 'Right gripper · robot0');
+const L = makeGripper(0xf59e0b, [2, 3, 4, 5], 'Left gripper · robot1');
+
+// home zones around the docked cube positions
+function homeZone() {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.06, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.18, depthWrite: false }));
+  scene.add(m); return m;
+}
+const zoneR = homeZone(), zoneL = homeZone();
+
+// ---------- mug ----------
+const mug = new THREE.Group();
+const mugMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness: 0.5 });
+const mugBody = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.036, 0.1, 28), mugMat); mugBody.castShadow = true; mug.add(mugBody);
+const handle = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.007, 10, 20, Math.PI), mugMat);
+handle.rotation.z = -Math.PI / 2; handle.position.x = 0.04; mug.add(handle);
+scene.add(mug);
+label(mug, 'Mug', [0, 0.08, 0]);
+const M0 = new THREE.Vector3(0.0, TOP + 0.05, -0.02);
+const SINK = new THREE.Vector3(0.5, TOP - 0.15, -0.05);
+const FALLEN = new THREE.Vector3(0.14, TOP + 0.04, 0.0);
+
+// ---------- operator, head camera ----------
+const op = new THREE.Group(); op.position.set(0, 0, 0.72); scene.add(op);
+const skin = new THREE.MeshStandardMaterial({ color: 0xd6a37c, roughness: 0.8 });
+const shirt = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.9 });
+const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.45, 6, 16), shirt); torso.position.set(0, 1.18, 0.05); op.add(torso);
+const head = new THREE.Group(); head.position.set(0, 1.6, 0.0); op.add(head);
+head.add(new THREE.Mesh(new THREE.SphereGeometry(0.1, 24, 16), skin));
+const headGopro = box(0.065, 0.045, 0.035, new THREE.MeshStandardMaterial({ color: 0x111111 }), 0, 0.07, -0.08, head);
+label(head, 'Head GoPro (observes cubes + env tags)', [0, 0.2, 0]);
+const headCam = new THREE.PerspectiveCamera(95, 4 / 3, 0.02, 5);
+headGopro.add(headCam);
+const coneCam = new THREE.PerspectiveCamera(95, 4 / 3, 0.02, 0.55);
+headGopro.add(coneCam);
+const coneHelper = new THREE.CameraHelper(coneCam); scene.add(coneHelper);
+const LOOK = new THREE.Vector3(-0.05, TOP, -0.02);
+
+// hand for resetting the scene
+const hand = new THREE.Group();
+const palm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.1), skin); hand.add(palm);
+scene.add(hand);
+const HAND_REST = new THREE.Vector3(0.25, 1.05, 0.5);
+
+// command card 24
+const card = new THREE.Group();
+const cardTag = tagMesh(24, 0.1); card.add(cardTag);
+const cardBack = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.13), new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+cardBack.position.z = -0.001; card.add(cardBack);
+scene.add(card);
+const cardLabel = label(card, 'Card 24 = discard', [0, 0.1, 0]);
+
+// knock rings
+const ring = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.004, 8, 48),
+  new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true }));
+scene.add(ring);
+const KNOCK = new THREE.Vector3(-0.31, TOP + 0.22, 0.05);
+
+// ---------- timeline / keyframes ----------
+const T_END = 34;
+const D = -15, G = -25;  // pitch (deg) docked / grasping
+// [t, x, y, z, pitchDeg, width]
+const v = (p, dx = 0, dy = 0, dz = 0) => [p.x + dx, p.y + dy, p.z + dz];
+const kR = [
+  [0, ...v(DOCK.R), D, .08], [2, ...v(DOCK.R), D, .08],
+  [3.0, ...v(KNOCK, 0.06), -20, .08], [3.4, ...v(KNOCK, 0.045), -20, .08], [3.8, ...v(KNOCK, 0.12, -0.02), -20, .08],
+  [5.2, 0.0, TOP + 0.08, 0.11, G, .09], [6.4, 0.0, TOP + 0.06, 0.11, G, .09], [7.2, 0.0, TOP + 0.06, -0.015, G, .09],
+  [7.8, 0.0, TOP + 0.06, -0.015, G, .05], [8.6, 0.05, TOP + 0.22, -0.02, G, .05],
+  [10.4, 0.5, TOP + 0.22, -0.05, G, .05], [11.0, 0.5, TOP + 0.08, -0.05, G, .05], [11.4, 0.5, TOP + 0.08, -0.05, G, .09],
+  [12.2, 0.42, TOP + 0.22, 0.02, G, .08], [14.0, ...v(DOCK.R), D, .08],
+  [20.0, ...v(DOCK.R), D, .08],
+  [21.0, ...v(KNOCK, 0.06), -20, .08], [21.4, ...v(KNOCK, 0.045), -20, .08], [21.8, ...v(KNOCK, 0.12, -0.02), -20, .08],
+  [22.8, 0.0, TOP + 0.08, 0.11, G, .09], [23.4, 0.0, TOP + 0.06, -0.015, G, .09], [23.9, 0.0, TOP + 0.06, -0.015, G, .055],
+  [24.6, 0.1, TOP + 0.2, 0.0, G, .055], [26.5, 0.1, TOP + 0.2, 0.02, G, .08],
+  [28.0, ...v(DOCK.R), D, .08], [T_END, ...v(DOCK.R), D, .08],
+];
+const kL = [
+  [0, ...v(DOCK.L), D, .08], [2, ...v(DOCK.L), D, .08],
+  [3.0, ...v(KNOCK, -0.06), -20, .08], [3.4, ...v(KNOCK, -0.045), -20, .08], [3.8, ...v(KNOCK, -0.12, -0.02), -20, .08],
+  [7.0, -0.38, TOP + 0.17, 0.12, -20, .08], [11.0, -0.36, TOP + 0.19, 0.1, -20, .08], [14.0, ...v(DOCK.L), D, .08],
+  [20.0, ...v(DOCK.L), D, .08],
+  [21.0, ...v(KNOCK, -0.06), -20, .08], [21.4, ...v(KNOCK, -0.045), -20, .08], [21.8, ...v(KNOCK, -0.12, -0.02), -20, .08],
+  [26.5, -0.37, TOP + 0.18, 0.11, -20, .08], [28.0, ...v(DOCK.L), D, .08], [T_END, ...v(DOCK.L), D, .08],
+];
+const smooth = a => a * a * (3 - 2 * a);
+function sample(keys, t) {
+  let i = 0;
+  while (i < keys.length - 2 && keys[i + 1][0] <= t) i++;
+  const a = keys[i], b = keys[i + 1];
+  const u = smooth(THREE.MathUtils.clamp((t - a[0]) / (b[0] - a[0]), 0, 1));
+  return a.slice(1).map((x, k) => x + (b[k + 1] - x) * u);
+}
+function poseGripper(gr, s) {
+  gr.g.position.set(s[0], s[1], s[2]);
+  gr.g.rotation.set(THREE.MathUtils.degToRad(s[3]), 0, 0);
+  gr.fingers[0].position.x = -s[4] / 2 - 0.006;
+  gr.fingers[1].position.x = s[4] / 2 + 0.006;
+}
+const lerpV = (a, b, u) => a.clone().lerp(b, u);
+const span = (t, a, b) => smooth(THREE.MathUtils.clamp((t - a) / (b - a), 0, 1));
+
+function poseMugAndHand(t) {
+  let p = M0.clone(), tilt = 0, handP = null;
+  if (t < 7.8) p = M0.clone();
+  else if (t < 11.3) p = R.g.position.clone();
+  else if (t < 11.7) { const u = (t - 11.3) / 0.4; p = lerpV(new THREE.Vector3(0.5, TOP + 0.08, -0.05), SINK, u * u); }
+  else if (t < 16.5) { p = SINK.clone(); if (t > 15.5) handP = lerpV(HAND_REST, SINK.clone().add(new THREE.Vector3(0, 0.08, 0)), span(t, 15.5, 16.5)); }
+  else if (t < 18.5) { const u = span(t, 16.5, 18.5); p = lerpV(SINK, M0, u); p.y += Math.sin(u * Math.PI) * 0.25; handP = p.clone().add(new THREE.Vector3(0, 0.08, 0)); }
+  else if (t < 23.9) { p = M0.clone(); if (t < 19.5) handP = lerpV(M0.clone().add(new THREE.Vector3(0, 0.08, 0)), HAND_REST, span(t, 18.5, 19.5)); }
+  else if (t < 24.4) p = R.g.position.clone();
+  else if (t < 24.8) { const u = span(t, 24.4, 24.8); const from = new THREE.Vector3(0.07, TOP + 0.15, -0.01); p = lerpV(from, FALLEN, u); tilt = u * Math.PI / 2; }
+  else if (t < 31.5) { p = FALLEN.clone(); tilt = Math.PI / 2; if (t > 30) handP = lerpV(HAND_REST, FALLEN.clone().add(new THREE.Vector3(0, 0.07, 0)), span(t, 30, 31.5)); }
+  else if (t < 33) { const u = span(t, 31.5, 33); p = lerpV(FALLEN, M0, u); p.y += Math.sin(u * Math.PI) * 0.1; tilt = (1 - u) * Math.PI / 2; handP = p.clone().add(new THREE.Vector3(0, 0.08, 0)); }
+  else { p = M0.clone(); if (t < 34) handP = lerpV(M0.clone().add(new THREE.Vector3(0, 0.08, 0)), HAND_REST, span(t, 33, 34)); }
+  mug.position.copy(p); mug.rotation.set(0, 0, tilt);
+  hand.visible = handP !== null;
+  if (handP) hand.position.copy(handP);
+}
+
+const SEGMENTS = [
+  [0, 3.4, 'home', 'HOME · idle'], [3.4, 14.0, 'ep', 'EPISODE 1 · kept'], [14.0, 21.4, 'home', 'HOME · reset by hand (idle)'],
+  [21.4, 28.0, 'bad', 'EPISODE 2 · discarded (card 24)'], [28.0, T_END, 'home', 'HOME · reset by hand (idle)'],
+];
+const CAPTIONS = [
+  [0, 'Grippers docked on the home stand → idle'],
+  [2.0, 'Lift both grippers and knock them together'],
+  [3.4, 'Knock = audio sync point + episode 1 starts'],
+  [5.0, 'Do the task: grasp the mug'],
+  [8.6, 'Carry it to the sink and release'],
+  [12.2, 'Return both grippers to the stand'],
+  [14.0, 'Docked and still ≥ 0.5 s → episode 1 ends'],
+  [15.5, 'Reset the scene by hand, grippers stay docked → idle'],
+  [20.0, 'Knock → episode 2 starts'],
+  [24.4, 'Mug slips: failed attempt'],
+  [24.9, 'Show card 24 to the head camera → discard episode 2'],
+  [26.6, 'Back to the stand, reset by hand, next episode'],
+];
+const KNOCKS = [3.4, 21.4];
+
+// timeline bar
+const bar = document.getElementById('tlBar');
+const COLORS = { home: '#6b7280', ep: '#4ade80', bad: '#f87171' };
+SEGMENTS.forEach(([a, b, k, txt]) => {
+  const d = document.createElement('div'); d.className = 'seg';
+  Object.assign(d.style, { left: `${a / T_END * 100}%`, width: `${(b - a) / T_END * 100}%`, background: COLORS[k] });
+  d.textContent = txt; bar.appendChild(d);
+});
+KNOCKS.forEach(t => { const d = document.createElement('div'); d.className = 'tick'; d.style.left = `${t / T_END * 100}%`; bar.appendChild(d); });
+const cursor = document.getElementById('tlCursor'); bar.appendChild(cursor);
+bar.addEventListener('click', e => { const r = bar.getBoundingClientRect(); time = (e.clientX - r.left) / r.width * T_END; });
+
+// ---------- UI ----------
+let time = parseFloat(new URLSearchParams(location.search).get('t')) || 0, playing = true, speed = 1;
+document.getElementById('btnPlay').onclick = e => { playing = !playing; e.target.textContent = playing ? '❚❚ Pause' : '▶ Play'; };
+document.getElementById('speed').onchange = e => speed = +e.target.value;
+document.getElementById('chkLabels').onchange = e => labels.forEach(l => l.visible = e.target.checked && (l !== cardLabel || card.visible));
+document.getElementById('chkFrustum').onchange = e => coneHelper.visible = e.target.checked;
+const stateEl = document.getElementById('state'), clockEl = document.getElementById('clock'), capEl = document.getElementById('caption');
+const pipEl = document.getElementById('pip');
+
+const dockedCube = {};
+function cubeWorld(gr) { return gr.cube.getWorldPosition(new THREE.Vector3()); }
+poseGripper(R, sample(kR, 0)); poseGripper(L, sample(kL, 0));
+scene.updateMatrixWorld(true);
+dockedCube.R = cubeWorld(R); dockedCube.L = cubeWorld(L);
+zoneR.position.copy(dockedCube.R); zoneL.position.copy(dockedCube.L);
+const prev = { R: dockedCube.R.clone(), L: dockedCube.L.clone() };
+const still = { R: 0, L: 0 };
+
+// ---------- loop ----------
+const clock = new THREE.Clock();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (playing) time = (time + dt * speed) % T_END;
+  const t = time;
+
+  poseGripper(R, sample(kR, t));
+  poseGripper(L, sample(kL, t));
+  poseMugAndHand(t);
+
+  // head looks at the work area, follows the action a little
+  const focus = LOOK.clone().lerp(R.g.position, 0.35);
+  head.lookAt(focus.x, focus.y, focus.z + 0.0);
+  head.rotateY(Math.PI);
+  headGopro.lookAt(focus);
+  headGopro.rotateY(Math.PI);
+  coneHelper.update();
+
+  // card 24 in front of the head camera
+  const showCard = t > 24.9 && t < 26.5;
+  card.visible = showCard;
+  cardLabel.visible = showCard && document.getElementById('chkLabels').checked;
+  if (showCard) {
+    scene.updateMatrixWorld(true);
+    const p = new THREE.Vector3(0.03, -0.06, -0.28); headGopro.localToWorld(p);
+    card.position.copy(p); card.lookAt(headGopro.getWorldPosition(new THREE.Vector3()));
+  }
+
+  // knock ring
+  const kt = KNOCKS.map(k => t - k).find(x => x >= 0 && x < 0.6);
+  ring.visible = kt !== undefined;
+  if (ring.visible) { ring.position.copy(KNOCK); ring.scale.setScalar(1 + kt * 4); ring.material.opacity = 1 - kt / 0.6; ring.lookAt(cam.position); }
+
+  // home zone test: near the docked cube pose and still
+  scene.updateMatrixWorld(true);
+  [['R', R, zoneR], ['L', L, zoneL]].forEach(([k, gr, zone]) => {
+    const p = cubeWorld(gr);
+    const speedNow = p.distanceTo(prev[k]) / Math.max(dt * speed, 1e-4);
+    prev[k].copy(p);
+    still[k] = (p.distanceTo(dockedCube[k]) < 0.03 && speedNow < 0.01) ? still[k] + dt * speed : 0;
+    const home = still[k] >= 0.5;
+    zone.material.color.set(home ? 0x4ade80 : 0x9ca3af);
+    zone.material.opacity = home ? 0.28 : 0.1;
+  });
+
+  const seg = SEGMENTS.find(([a, b]) => t >= a && t < b) || SEGMENTS[0];
+  stateEl.textContent = seg[3]; stateEl.className = 'chip ' + seg[2];
+  clockEl.textContent = `${t.toFixed(1)} s`;
+  capEl.textContent = [...CAPTIONS].reverse().find(([a]) => t >= a)[1];
+  cursor.style.left = `${t / T_END * 100}%`;
+
+  // main view
+  const W = innerWidth, H = innerHeight;
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, W, H);
+  renderer.render(scene, cam);
+  labelRenderer.render(scene, cam);
+
+  // head camera picture-in-picture
+  const r = pipEl.getBoundingClientRect();
+  const helperVis = coneHelper.visible; coneHelper.visible = false;
+  const lv = labels.map(l => l.visible); labels.forEach(l => l.visible = false);
+  renderer.setScissorTest(true);
+  renderer.setScissor(r.left, H - r.bottom, r.width, r.height);
+  renderer.setViewport(r.left, H - r.bottom, r.width, r.height);
+  headCam.aspect = r.width / r.height; headCam.updateProjectionMatrix();
+  renderer.render(scene, headCam);
+  coneHelper.visible = helperVis; labels.forEach((l, i) => l.visible = lv[i]);
+
+  requestAnimationFrame(frame);
+}
+frame();
+
+addEventListener('resize', () => {
+  cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); labelRenderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

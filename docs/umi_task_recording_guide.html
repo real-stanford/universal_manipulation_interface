@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMI — Recording a Dataset for One Task</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d1f23; --muted: #5d636e; --line: #d9dce1; --card: #f6f7f9;
+    --accent: #2f6fde; --accent-soft: #e4edfc; --ok: #1f8a4c; --ok-soft: #e2f4ea;
+    --warn: #b4540a; --warn-soft: #fcefe2; --bad: #c0362c; --bad-soft: #fbe5e3;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171b; --fg: #e6e8eb; --muted: #9aa1ad; --line: #2e3239; --card: #1d2026;
+      --accent: #6ea0ff; --accent-soft: #1e2a40; --ok: #4cc283; --ok-soft: #173326;
+      --warn: #f0a050; --warn-soft: #3a2a18; --bad: #f07267; --bad-soft: #3d1f1d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 56px 0 14px; padding-top: 14px; border-top: 1px solid var(--line);
+       display: flex; align-items: center; gap: 12px; }
+  h3 { font-size: 15px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .num { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+         background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; flex: none; }
+  code, pre { font-family: var(--mono); font-size: 13px; }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+        overflow-x: auto; line-height: 1.5; margin: 10px 0; }
+  pre code { background: none; border: 0; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  ol.steps { padding-left: 0; list-style: none; counter-reset: s; margin: 10px 0; }
+  ol.steps > li { counter-increment: s; position: relative; padding: 6px 0 6px 34px; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 6px; width: 22px; height: 22px;
+       border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-weight: 700;
+       font-size: 12px; display: grid; place-items: center; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  figure { margin: 14px 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  svg { width: 100%; height: auto; display: block; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+         padding: 1px 7px; border-radius: 999px; vertical-align: 1px; white-space: nowrap; }
+  .req { background: var(--bad-soft); color: var(--bad); }
+  .rec { background: var(--accent-soft); color: var(--accent); }
+  .box { border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 14px; border: 1px solid; }
+  .box.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+  .box.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+  .box b { font-weight: 700; }
+  ul.check { list-style: none; padding-left: 0; margin: 8px 0; }
+  ul.check li { padding: 3px 0 3px 26px; position: relative; }
+  ul.check li::before { content: ""; position: absolute; left: 2px; top: 7px; width: 13px; height: 13px;
+       border: 2px solid var(--muted); border-radius: 3px; }
+  .legend { font-size: 13px; color: var(--muted); }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 0; }
+  nav.toc a { font-size: 13px; text-decoration: none; color: var(--fg); background: var(--card);
+       border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  nav.toc a:hover { border-color: var(--accent); color: var(--accent); }
+  /* svg palette */
+  .s-line { stroke: var(--fg); }
+  .s-muted { stroke: var(--muted); }
+  .f-fg { fill: var(--fg); }
+  .f-muted { fill: var(--muted); }
+  .f-card { fill: var(--card); }
+  .f-bg { fill: var(--bg); }
+  .f-acc { fill: var(--accent); }
+  .f-acc-soft { fill: var(--accent-soft); }
+  .s-acc { stroke: var(--accent); }
+  .f-ok-soft { fill: var(--ok-soft); }
+  .s-ok { stroke: var(--ok); }
+  .f-ok { fill: var(--ok); }
+  .f-warn { fill: var(--warn); }
+  .s-warn { stroke: var(--warn); }
+  .f-bad { fill: var(--bad); }
+  .s-bad { stroke: var(--bad); }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>UMI: recording a dataset for one task</h1>
+<p class="sub">Steps from setting up the cameras to <code>dataset.zarr.zip</code>. Every threshold below comes from this repository's pipeline code.
+<span class="tag req">required</span> = the pipeline fails or drops data without it.
+<span class="tag rec">recommended</span> = good practice that the code doesn't check.</p>
+
+<nav class="toc">
+  <a href="#overview">Overview</a><a href="#s0">0 · Cameras</a><a href="#s1">1 · Tags</a><a href="#s2">2 · Time sync</a>
+  <a href="#s3">3 · Mapping</a><a href="#s4">4 · Gripper cal</a><a href="#s5">5 · Demos</a>
+  <a href="#s6">6 · Files</a><a href="#s7">7 · Process</a><a href="#s8">8 · Checks</a>
+</nav>
+
+<!-- ============================ OVERVIEW ============================ -->
+<h2 id="overview">Overview</h2>
+
+<figure>
+<svg viewBox="0 0 940 210" role="img" aria-label="Session workflow">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" class="f-muted"/>
+    </marker>
+  </defs>
+  <!-- session bracket -->
+  <rect x="148" y="14" width="620" height="150" rx="12" class="f-acc-soft" />
+  <text x="160" y="36" font-size="12" font-weight="700" class="f-acc" letter-spacing=".06em">ONE SESSION = ONE LOCATION / SCENE SETUP</text>
+
+  <g font-size="13" text-anchor="middle">
+    <rect x="10"  y="64" width="118" height="74" rx="9" class="f-bg s-line" stroke-width="1.2"/>
+    <text x="69" y="94" font-weight="700" class="f-fg">Setup</text>
+    <text x="69" y="113" class="f-muted" font-size="11.5">GoPro settings</text>
+    <text x="69" y="128" class="f-muted" font-size="11.5">print tags</text>
+
+    <rect x="160" y="64" width="128" height="74" rx="9" class="f-bg s-acc" stroke-width="1.6"/>
+    <text x="224" y="94" font-weight="700" class="f-fg">Time sync</text>
+    <text x="224" y="113" class="f-muted" font-size="11.5">QR timecode</text>
+    <text x="224" y="128" class="f-muted" font-size="11.5">every camera</text>
+
+    <rect x="308" y="64" width="128" height="74" rx="9" class="f-bg s-acc" stroke-width="1.6"/>
+    <text x="372" y="94" font-weight="700" class="f-fg">Mapping</text>
+    <text x="372" y="113" class="f-muted" font-size="11.5">1 video, ~60 s</text>
+    <text x="372" y="128" class="f-muted" font-size="11.5">tag 13 on table</text>
+
+    <rect x="456" y="64" width="128" height="74" rx="9" class="f-bg s-acc" stroke-width="1.6"/>
+    <text x="520" y="94" font-weight="700" class="f-fg">Gripper cal</text>
+    <text x="520" y="113" class="f-muted" font-size="11.5">1 video / camera</text>
+    <text x="520" y="128" class="f-muted" font-size="11.5">open ↔ close</text>
+
+    <rect x="604" y="64" width="150" height="74" rx="9" class="f-bg s-acc" stroke-width="1.6"/>
+    <text x="679" y="94" font-weight="700" class="f-fg">Demonstrations</text>
+    <text x="679" y="113" class="f-muted" font-size="11.5">1 video = 1 demo</text>
+    <text x="679" y="128" class="f-muted" font-size="11.5">N repetitions</text>
+
+    <rect x="800" y="64" width="130" height="74" rx="9" class="f-bg s-line" stroke-width="1.2"/>
+    <text x="865" y="94" font-weight="700" class="f-fg">Process</text>
+    <text x="865" y="113" class="f-muted" font-size="11.5">SLAM pipeline</text>
+    <text x="865" y="128" class="f-muted" font-size="11.5">→ zarr dataset</text>
+  </g>
+  <g stroke-width="1.6" class="s-muted" marker-end="url(#arr)">
+    <line x1="129" y1="101" x2="157" y2="101"/>
+    <line x1="289" y1="101" x2="305" y2="101"/>
+    <line x1="437" y1="101" x2="453" y2="101"/>
+    <line x1="585" y1="101" x2="601" y2="101"/>
+    <line x1="769" y1="101" x2="797" y2="101"/>
+  </g>
+  <text x="458" y="190" font-size="12" class="f-muted" text-anchor="middle">Repeat the session block for each new location or table layout. One task dataset = 1…N sessions.</text>
+</svg>
+</figure>
+
+<table>
+  <tr><th>Item</th><th>Per session</th><th>Notes</th></tr>
+  <tr><td>Mapping video</td><td>1</td><td>Recorded with a gripper camera. Builds the SLAM map and the world frame.</td></tr>
+  <tr><td>Gripper calibration video</td><td>1 per gripper camera</td><td>Records the gripper's fully closed and fully open widths.</td></tr>
+  <tr><td>Demonstration videos</td><td>N</td><td>One video per demonstration. Bimanual: one video per camera, recorded at the same time.</td></tr>
+</table>
+
+<!-- ============================ STEP 0 ============================ -->
+<h2 id="s0"><span class="num">0</span>Camera setup (once per GoPro)</h2>
+
+<table>
+  <tr><th>Setting</th><th>Value</th><th></th><th>Why</th></tr>
+  <tr><td>Firmware</td><td>GoPro Labs</td><td><span class="tag req">required</span></td><td>Needed for QR timecode sync</td></tr>
+  <tr><td>Resolution / aspect</td><td>2.7K · 4:3 (2704 × 2028)</td><td><span class="tag req">required</span></td><td>Intrinsics, masks and SLAM settings assume 2704×2028</td></tr>
+  <tr><td>Frame rate</td><td>60 (59.94) fps</td><td><span class="tag req">required</span></td><td>Must be the same on all videos; <code>06</code> exits if it isn't</td></tr>
+  <tr><td>Lens</td><td>Wide (no Max Lens Mod). Not Linear, not Horizon Leveling.</td><td><span class="tag req">required</span></td><td>Must match your own Wide-mode intrinsics and SLAM settings file; the stock files are for Max Lens Mod</td></tr>
+  <tr><td>Stabilization (HyperSmooth)</td><td>Off</td><td><span class="tag req">required</span></td><td>Intrinsics were calibrated unstabilized; stabilizing breaks the camera–IMU geometry</td></tr>
+  <tr><td>Orientation</td><td>Locked, upright</td><td><span class="tag req">required</span></td><td><code>scripts/check_gopro_orientation.py</code> flags any video whose AutoRotation ≠ <code>U</code></td></tr>
+  <tr><td>Date / time</td><td>Set correctly</td><td><span class="tag req">required</span></td><td>Start time = file creation date + timecode</td></tr>
+  <tr><td>Model</td><td>Hero 9 / 10 / 11, same model on all grippers</td><td><span class="tag req">required</span></td><td>The 14.65 mm camera-to-mount offset is hard-coded for these models</td></tr>
+  <tr><td>Mount</td><td>Same rigid UMI mount on every gripper</td><td><span class="tag req">required</span></td><td>Camera → fingertip offset is a constant (86 mm height, 14.65 + 205 mm forward)</td></tr>
+</table>
+
+<div class="box warn"><b>No mirrors on your gripper:</b> nothing changes during recording. During processing, pass <code>--no_mirror</code> to step 07 and never use <code>--mirror_swap</code> (see <a href="#s7">step 7</a>).</div>
+
+<!-- ============================ STEP 1 ============================ -->
+<h2 id="s1"><span class="num">1</span>Print and place the ArUco tags</h2>
+
+<div class="grid2">
+<div>
+<table>
+  <tr><th>Tag ID</th><th>Printed size*</th><th>Where</th><th>Used for</th></tr>
+  <tr><td><b>0, 1</b></td><td>16 mm</td><td>Gripper A fingers (L, R)</td><td>Gripper width + gripper ID</td></tr>
+  <tr><td><b>6, 7</b></td><td>16 mm</td><td>Gripper B fingers (L, R)</td><td>Same, second gripper</td></tr>
+  <tr><td><b>13</b></td><td>160 mm</td><td>Flat on the table</td><td>World frame (mapping only)</td></tr>
+  <tr><td>2–5, 8–11</td><td>60 mm</td><td>Gripper body</td><td>Not used by the pipeline (optional)</td></tr>
+</table>
+<p class="legend">Dictionary: <code>DICT_4X4_50</code>. *Size = outer edge of the black square. Sizes come from <code>example/calibration/aruco_config.yaml</code>. A wrong print size gives wrong metric widths and a wrong world-frame scale.</p>
+<ul class="check">
+  <li>Check the printed sizes with calipers</li>
+  <li>Tags flat, not bent, glued rigidly</li>
+  <li>Each gripper has its own finger-tag pair (left/right grippers differ)</li>
+</ul>
+</div>
+
+<figure style="margin-top:10px">
+<svg viewBox="0 0 400 300" role="img" aria-label="Camera view with finger tags">
+  <rect x="0" y="0" width="400" height="300" rx="6" class="f-bg s-muted" stroke-width="1"/>
+  <!-- fisheye vignette -->
+  <ellipse cx="200" cy="150" rx="210" ry="175" fill="none" class="s-muted" stroke-dasharray="3 4" stroke-width=".8"/>
+  <!-- gripper body mask -->
+  <path d="M0,200 L96,222 L163,256 L200,262 L237,256 L304,222 L400,200 L400,300 L0,300 Z" class="f-muted" opacity=".35"/>
+  <!-- fingers -->
+  <path d="M120,300 L150,200 L178,200 L172,300 Z" class="f-card s-line" stroke-width="1.2"/>
+  <path d="M280,300 L250,200 L222,200 L228,300 Z" class="f-card s-line" stroke-width="1.2"/>
+  <!-- finger tags -->
+  <g>
+    <rect x="149" y="222" width="22" height="22" class="f-fg"/>
+    <rect x="153" y="226" width="6" height="6" class="f-bg"/><rect x="161" y="234" width="6" height="6" class="f-bg"/>
+    <rect x="229" y="222" width="22" height="22" class="f-fg"/>
+    <rect x="233" y="234" width="6" height="6" class="f-bg"/><rect x="241" y="226" width="6" height="6" class="f-bg"/>
+  </g>
+  <text x="160" y="262" font-size="12" font-weight="700" text-anchor="middle" class="f-acc">ID 0</text>
+  <text x="240" y="262" font-size="12" font-weight="700" text-anchor="middle" class="f-acc">ID 1</text>
+  <!-- width arrow -->
+  <line x1="160" y1="190" x2="240" y2="190" class="s-acc" stroke-width="1.5"/>
+  <path d="M160,190 l7,-4 v8 z M240,190 l-7,-4 v8 z" class="f-acc"/>
+  <text x="200" y="181" font-size="11" text-anchor="middle" class="f-acc">width = x<tspan font-size="8">R</tspan> − x<tspan font-size="8">L</tspan></text>
+  <!-- scene -->
+  <text x="200" y="110" font-size="12" text-anchor="middle" class="f-muted">scene (used by SLAM)</text>
+  <text x="62" y="288" font-size="10.5" text-anchor="middle" class="f-fg" opacity=".8">gripper body (masked)</text>
+</svg>
+<figcaption>Gripper camera view. Both finger tags must be visible. A tag only counts if its depth is 64–80 mm from the camera.</figcaption>
+</figure>
+</div>
+
+<!-- ============================ STEP 2 ============================ -->
+<h2 id="s2"><span class="num">2</span>Time sync (start of every session)</h2>
+
+<div class="grid2">
+<div>
+<ol class="steps">
+  <li>On a phone or monitor, open the GoPro Labs <b>Precision Date and Time</b> QR page (gopro.github.io/labs). It shows a QR code that updates continuously.</li>
+  <li>Turn on GoPro A and point it at the QR code until it confirms (beep or screen).</li>
+  <li>Repeat for every other GoPro, including any extra non-gripper camera.</li>
+  <li>Re-sync after a battery swap or a long power-off. <span class="tag rec">recommended</span></li>
+</ol>
+<p class="legend">Accuracy is about ±1/60 s. The pipeline groups videos into demos and aligns frames using this timecode. Without sync, bimanual episodes are mismatched or dropped.</p>
+<p class="legend">To verify: film the QR code, then run <code>python scripts/calibrate_timecode_offset.py -i video.MP4</code></p>
+</div>
+<figure>
+<svg viewBox="0 0 400 190" role="img" aria-label="Time sync">
+  <rect x="20" y="40" width="110" height="110" rx="10" class="f-card s-line" stroke-width="1.2"/>
+  <g class="f-fg">
+    <rect x="34" y="54" width="26" height="26"/><rect x="90" y="54" width="26" height="26"/><rect x="34" y="110" width="26" height="26"/>
+    <rect x="68" y="62" width="10" height="10"/><rect x="68" y="86" width="14" height="10"/><rect x="88" y="98" width="10" height="16"/>
+    <rect x="66" y="116" width="10" height="16"/><rect x="100" y="120" width="16" height="10"/>
+  </g>
+  <rect x="39" y="59" width="16" height="16" class="f-card"/><rect x="95" y="59" width="16" height="16" class="f-card"/><rect x="39" y="115" width="16" height="16" class="f-card"/>
+  <text x="75" y="170" font-size="11.5" text-anchor="middle" class="f-muted">live QR (time)</text>
+
+  <g>
+    <rect x="270" y="20" width="96" height="62" rx="8" class="f-bg s-acc" stroke-width="1.6"/>
+    <circle cx="300" cy="51" r="16" class="f-card s-line"/><circle cx="300" cy="51" r="7" class="f-fg"/>
+    <text x="338" y="56" font-size="12" font-weight="700" class="f-acc">A</text>
+    <rect x="270" y="110" width="96" height="62" rx="8" class="f-bg s-acc" stroke-width="1.6"/>
+    <circle cx="300" cy="141" r="16" class="f-card s-line"/><circle cx="300" cy="141" r="7" class="f-fg"/>
+    <text x="338" y="146" font-size="12" font-weight="700" class="f-acc">B</text>
+  </g>
+  <g class="s-acc" stroke-width="1.4" stroke-dasharray="4 4" fill="none">
+    <path d="M268,51 L135,85"/><path d="M268,141 L135,105"/>
+  </g>
+  <text x="205" y="62" font-size="11" class="f-muted" text-anchor="middle">1st</text>
+  <text x="205" y="138" font-size="11" class="f-muted" text-anchor="middle">2nd</text>
+</svg>
+<figcaption>Scan the same live QR code with every camera, one after another.</figcaption>
+</figure>
+</div>
+
+<!-- ============================ STEP 3 ============================ -->
+<h2 id="s3"><span class="num">3</span>Mapping video (1 per session)</h2>
+
+<div class="grid2">
+<div>
+<h3>Before</h3>
+<ul class="check">
+  <li>Arrange the scene as it will be for the demos</li>
+  <li>Place <b>tag 13</b> flat on the table, near the center of the workspace</li>
+  <li>Use a <b>gripper camera</b> (mounted on the gripper), not a bare GoPro</li>
+</ul>
+<h3>Record</h3>
+<ol class="steps">
+  <li>Start recording 0.3–2 m from the tag, with the tag near the image center. Hold a few seconds. <span class="tag rec">recommended</span></li>
+  <li>Move slowly over the whole workspace, covering every height and angle the demos will use.</li>
+  <li>Include close views at grasp height and wide views of the surroundings.</li>
+  <li>Return to the tag several times along the way. Several good tag views make the world frame more accurate.</li>
+  <li>Stop after about 60 s. <span class="tag rec">recommended</span></li>
+</ol>
+<h3>Rules</h3>
+<table>
+  <tr><td>Tag 13 seen 0.3–2 m away, in the central zone</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Slow, smooth motion; no fast spins</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Scene must have texture; avoid looking at blank walls only</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Don't move objects or furniture until the session ends</td><td><span class="tag rec">recommended</span></td></tr>
+</table>
+<p class="legend">After mapping, the tag can stay or be removed. Tags are inpainted out of the training images.</p>
+</div>
+
+<div>
+<figure>
+<svg viewBox="0 0 400 300" role="img" aria-label="Tag must be in central zone">
+  <rect x="0" y="0" width="400" height="300" rx="6" class="f-bg s-muted"/>
+  <circle cx="200" cy="150" r="90" class="f-ok-soft s-ok" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="200" y="52" font-size="11.5" text-anchor="middle" class="f-ok" font-weight="700">valid zone</text>
+  <!-- tag good -->
+  <g transform="translate(176,128) rotate(-8)">
+    <rect width="44" height="44" class="f-fg"/><rect x="8" y="8" width="11" height="11" class="f-bg"/><rect x="24" y="24" width="11" height="11" class="f-bg"/>
+  </g>
+  <text x="200" y="192" font-size="12" font-weight="700" text-anchor="middle" class="f-fg">13</text>
+  <!-- tag bad -->
+  <g transform="translate(330,226)" opacity=".55">
+    <rect width="30" height="30" class="f-fg"/>
+  </g>
+  <path d="M325,220 l40,40 M365,220 l-40,40" class="s-bad" stroke-width="2.5"/>
+  <text x="345" y="280" font-size="10.5" text-anchor="middle" class="f-bad">ignored</text>
+  <text x="200" y="285" font-size="10.5" text-anchor="middle" class="f-muted">radius = 0.6 × half image height (≈ 608 px at 2.7K)</text>
+</svg>
+<figcaption>Tag 13 detections only count inside this zone and 0.3–2 m from the camera (<code>calibrate_slam_tag.py</code>).</figcaption>
+</figure>
+
+<figure>
+<svg viewBox="0 0 400 260" role="img" aria-label="Mapping path top view">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" class="f-acc"/>
+    </marker>
+  </defs>
+  <rect x="80" y="60" width="240" height="140" rx="6" class="f-card s-line" stroke-width="1.2"/>
+  <text x="90" y="78" font-size="11" class="f-muted">table / workspace</text>
+  <rect x="186" y="116" width="28" height="28" class="f-fg"/>
+  <text x="200" y="160" font-size="11" font-weight="700" text-anchor="middle" class="f-fg">13</text>
+  <rect x="120" y="96" width="22" height="16" rx="3" class="f-muted" opacity=".6"/>
+  <circle cx="275" cy="168" r="10" class="f-muted" opacity=".6"/>
+  <path d="M60,230 C30,140 70,30 200,25 C330,30 370,140 340,230 C300,250 260,190 200,200 C140,190 110,240 60,230"
+        fill="none" class="s-acc" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arr2)"/>
+  <circle cx="60" cy="230" r="6" class="f-acc"/>
+  <text x="44" y="252" font-size="11" class="f-acc" font-weight="700">start</text>
+  <g class="s-acc" stroke-width="1" opacity=".7">
+    <line x1="45" y1="135" x2="180" y2="130"/><line x1="200" y1="26" x2="200" y2="110"/><line x1="355" y1="140" x2="220" y2="130"/>
+  </g>
+  <text x="200" y="14" font-size="11" text-anchor="middle" class="f-muted">look at the workspace from all sides demos will use</text>
+</svg>
+<figcaption>Top-down view. Walk a slow loop around the workspace; the lines show the camera aimed back at the scene.</figcaption>
+</figure>
+</div>
+</div>
+
+<!-- ============================ STEP 4 ============================ -->
+<h2 id="s4"><span class="num">4</span>Gripper calibration video (1 per gripper camera)</h2>
+
+<div class="grid2">
+<div>
+<ol class="steps">
+  <li>Start recording on the gripper camera.</li>
+  <li>Close the gripper fully and hold about 1 s.</li>
+  <li>Open it fully and hold about 1 s.</li>
+  <li>Repeat 3–5 times, then stop. <span class="tag rec">recommended</span></li>
+</ol>
+<table>
+  <tr><td>Both finger tags detected in ≥ 80 % of frames</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Reach the true fully closed and fully open positions</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Record before the first demo of the session</td><td><span class="tag rec">recommended</span></td></tr>
+</table>
+<p class="legend">The minimum width measured becomes 0 and the maximum becomes fully open (<code>calibrate_gripper_range.py</code>). If the gripper never fully closes in this video, every width in the dataset is offset.</p>
+</div>
+<figure>
+<svg viewBox="0 0 400 170" role="img" aria-label="Gripper calibration timeline">
+  <line x1="20" y1="130" x2="385" y2="130" class="s-muted" stroke-width="1"/>
+  <text x="385" y="148" font-size="11" text-anchor="end" class="f-muted">time</text>
+  <text x="6" y="34" font-size="11" class="f-muted">open</text>
+  <text x="6" y="124" font-size="11" class="f-muted">closed</text>
+  <path d="M56,120 L72,120 L84,30 L110,30 L125,120 L160,120 L175,30 L210,30 L225,120 L260,120 L275,30 L310,30 L325,120 L370,120"
+        fill="none" class="s-acc" stroke-width="2.4" stroke-linejoin="round"/>
+  <line x1="56" y1="30" x2="380" y2="30" class="s-ok" stroke-dasharray="3 4"/>
+  <line x1="56" y1="120" x2="380" y2="120" class="s-ok" stroke-dasharray="3 4"/>
+  <text x="200" y="20" font-size="11" text-anchor="middle" class="f-ok">max width</text>
+  <text x="200" y="160" font-size="11" text-anchor="middle" class="f-ok">min width → 0</text>
+</svg>
+<figcaption>Gripper width over time: fully close, fully open, a few times.</figcaption>
+</figure>
+</div>
+
+<!-- ============================ STEP 5 ============================ -->
+<h2 id="s5"><span class="num">5</span>Demonstrations (N per session)</h2>
+
+<div class="grid2">
+<div>
+<h3>Each demo</h3>
+<ol class="steps">
+  <li>Reset the scene to a new starting state.</li>
+  <li>Hold the gripper so the camera sees the mapped workspace.</li>
+  <li>Start recording. Wait about 1 s with the camera on the scene. <span class="tag rec">recommended</span></li>
+  <li>Do the task once, at normal speed and with smooth motion.</li>
+  <li>Hold about 1 s at the end, then stop recording.</li>
+</ol>
+<h3>Rules</h3>
+<table>
+  <tr><td>One video = one demo</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Stay in the area covered by the mapping video</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>≤ 10 untracked frames per video, else the whole video is dropped</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>≥ 60 tracked frames (≈1 s)</td><td><span class="tag req">required</span></td></tr>
+  <tr><td>Finger tags visible in ≥ 90 % of frames</td><td><span class="tag rec">recommended</span></td></tr>
+  <tr><td>No hand or object covering the camera for long</td><td><span class="tag rec">recommended</span></td></tr>
+  <tr><td>Vary object positions and starting poses across demos</td><td><span class="tag rec">recommended</span></td></tr>
+</table>
+</div>
+<div>
+<figure>
+<svg viewBox="0 0 400 120" role="img" aria-label="Single demo timeline">
+  <text x="10" y="18" font-size="12" font-weight="700" class="f-fg">Single gripper</text>
+  <rect x="20" y="38" width="44" height="34" rx="4" class="f-card s-muted"/>
+  <rect x="64" y="38" width="262" height="34" class="f-acc-soft s-acc"/>
+  <rect x="326" y="38" width="44" height="34" rx="4" class="f-card s-muted"/>
+  <text x="42" y="60" font-size="11" text-anchor="middle" class="f-muted">~1 s</text>
+  <text x="195" y="60" font-size="12" text-anchor="middle" class="f-acc" font-weight="700">task</text>
+  <text x="348" y="60" font-size="11" text-anchor="middle" class="f-muted">~1 s</text>
+  <path d="M20,84 v-8 M370,84 v-8" class="s-line"/>
+  <text x="20" y="100" font-size="11" class="f-fg">● REC</text>
+  <text x="370" y="100" font-size="11" text-anchor="end" class="f-fg">■ STOP</text>
+</svg>
+<figcaption>Each demo is its own video.</figcaption>
+</figure>
+
+<figure>
+<svg viewBox="0 0 400 160" role="img" aria-label="Bimanual overlap">
+  <text x="10" y="18" font-size="12" font-weight="700" class="f-fg">Bimanual (2 cameras)</text>
+  <text x="10" y="56" font-size="11" class="f-muted">cam A</text>
+  <rect x="56" y="42" width="290" height="22" rx="4" class="f-card s-muted"/>
+  <text x="10" y="92" font-size="11" class="f-muted">cam B</text>
+  <rect x="86" y="78" width="290" height="22" rx="4" class="f-card s-muted"/>
+  <rect x="86" y="34" width="260" height="74" class="f-acc-soft s-acc" stroke-dasharray="5 4" opacity=".75"/>
+  <text x="216" y="128" font-size="12" text-anchor="middle" class="f-acc" font-weight="700">episode = time both cameras record</text>
+  <text x="216" y="148" font-size="10.5" text-anchor="middle" class="f-muted">start A and B before the task, stop both after it</text>
+</svg>
+<figcaption>Left and right are assigned automatically from the SLAM poses. Do the task inside the overlap.</figcaption>
+</figure>
+
+<div class="box ok"><b>How many demos:</b> plan for 10–20 % more than you need. Videos with lost tracking get dropped. The pipeline prints the share of data it kept (the example dataset kept 99 %).</div>
+</div>
+</div>
+
+<!-- ============================ STEP 6 ============================ -->
+<h2 id="s6"><span class="num">6</span>Copy files into the session folder</h2>
+
+<div class="grid2">
+<div>
+<pre><code>my_task/
+└── session_01/
+    └── raw_videos/
+        ├── mapping.mp4              ← rename the mapping video
+        ├── gripper_calibration/
+        │   └── GX010101.MP4         ← one per gripper camera
+        ├── GX010102.MP4             ← demos (keep camera names)
+        ├── GX010103.MP4
+        └── ...</code></pre>
+<p class="legend">Copy the original MP4s and don't re-encode them. The IMU data and timecode live inside the MP4 metadata.</p>
+</div>
+<div>
+<table>
+  <tr><th>If you skip…</th><th>Pipeline fallback (<code>00_process_videos.py</code>)</th></tr>
+  <tr><td>Naming <code>mapping.mp4</code></td><td>Picks the <b>largest</b> file as the mapping video</td></tr>
+  <tr><td>The <code>gripper_calibration/</code> folder</td><td>Picks the <b>earliest</b> video from each camera</td></tr>
+</table>
+<div class="box warn">Place both explicitly. Relying on the fallback is how a long demo becomes the "map" or a demo becomes the "gripper calibration".</div>
+</div>
+</div>
+
+<!-- ============================ STEP 7 ============================ -->
+<h2 id="s7"><span class="num">7</span>Process</h2>
+
+<pre><code>conda activate umi
+
+# SLAM + tags + calibration + episode plan (steps 00–06), one or many sessions
+python run_slam_pipeline.py my_task/session_01 my_task/session_02
+
+# Build the training dataset (no mirrors on your gripper → --no_mirror)
+python scripts_slam_pipeline/07_generate_replay_buffer.py \
+    --no_mirror \
+    -o my_task/dataset.zarr.zip \
+    my_task/session_01 my_task/session_02
+
+# Optional: flag videos recorded with the wrong orientation
+python scripts/check_gopro_orientation.py my_task/session_01</code></pre>
+
+<table>
+  <tr><th>Step</th><th>Output (per video folder in <code>demos/</code>)</th></tr>
+  <tr><td>00 process videos</td><td><code>demos/mapping</code>, <code>demos/gripper_calibration_*</code>, <code>demos/demo_&lt;serial&gt;_&lt;time&gt;</code></td></tr>
+  <tr><td>01 extract IMU</td><td><code>imu_data.json</code></td></tr>
+  <tr><td>02 create map</td><td><code>mapping/map_atlas.osa</code></td></tr>
+  <tr><td>03 batch SLAM</td><td><code>camera_trajectory.csv</code></td></tr>
+  <tr><td>04 detect ArUco</td><td><code>tag_detection.pkl</code></td></tr>
+  <tr><td>05 calibrations</td><td><code>mapping/tx_slam_tag.json</code>, <code>gripper_range.json</code></td></tr>
+  <tr><td>06 dataset plan</td><td><code>session_01/dataset_plan.pkl</code></td></tr>
+  <tr><td>07 replay buffer</td><td><code>dataset.zarr.zip</code></td></tr>
+</table>
+
+<div class="box warn">Don't use <code>--mirror_swap</code> or <code>--mirror_crop</code> on a gripper without mirrors. Use the same <code>--no_mirror</code> choice when you run the policy on the robot.</div>
+
+<!-- ============================ STEP 8 ============================ -->
+<h2 id="s8"><span class="num">8</span>Check the session</h2>
+
+<table>
+  <tr><th>Look at</th><th>Good</th><th>If bad</th></tr>
+  <tr><td>Step 06 log: <code>"X% of raw data are used"</code></td><td>&gt; 80 %</td><td>Remap with slower motion and more coverage; check scene texture</td></tr>
+  <tr><td>Step 06 log: <code>Skipping … frames are lost</code></td><td>Few or none</td><td>Move more slowly in demos; stay inside the mapped area</td></tr>
+  <tr><td>Step 06 log: <code>Assigned camera_idx</code> table</td><td>Every gripper camera has <code>gripper_hw_idx ≥ 0</code></td><td>Finger tags hidden or unreadable; check printing and lighting</td></tr>
+  <tr><td>Step 05 log: <code>Tag detection standard deviation (cm)</code></td><td>Below 1 cm on each axis</td><td>More and closer tag 13 views in the mapping video</td></tr>
+  <tr><td><code>demos/mapping/slam_stdout.txt</code></td><td>Map saved</td><td>Mapping failed; record it again</td></tr>
+  <tr><td><code>gripper_calibration_*/gripper_range.json</code></td><td>Exists, <code>max_width</code> ≈ real opening</td><td>Re-record the calibration video</td></tr>
+</table>
+
+<h3>Session checklist</h3>
+<ul class="check">
+  <li>All cameras: 2.7K 4:3, 60 fps, Lens = Wide, HyperSmooth off, orientation locked</li>
+  <li>QR time sync done on every camera</li>
+  <li>Mapping video with tag 13 in clear view, about 60 s, slow motion</li>
+  <li>Gripper calibration video per gripper camera, fully closed and fully open</li>
+  <li>N demos, one video each, scene reset between demos</li>
+  <li>Files placed as <code>raw_videos/mapping.mp4</code> and <code>raw_videos/gripper_calibration/</code></li>
+  <li><code>run_slam_pipeline.py</code> → check data used % → <code>07 … --no_mirror</code></li>
+</ul>
+
+</main>
+</body>
+</html>

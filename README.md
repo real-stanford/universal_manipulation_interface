@@ -1,5 +1,7 @@
 # Universal Manipulation Interface
 
+Fork with a head camera tag tracking pipeline (GTSAM): [README_tag_tracking.md](README_tag_tracking.md).
+
 [[Project page]](https://umi-gripper.github.io/)
 [[Paper]](https://umi-gripper.github.io/#paper)
 [[Hardware Guide]](https://docs.google.com/document/d/1TPYwV9sNVPAi0ZlAupDMkXZ4CA1hsZx7YDMSmcEy6EU/edit?usp=sharing)
