@@ -53,7 +53,15 @@ def test_spans():
     # spans cover the episode without gaps or overlap
     assert all(a['end'] == b['start'] for a, b in zip(spans[:-1], spans[1:]))
     picks = frame_times_for_review(2.0, 20.0, {'right': events}, max_frames=8)
-    assert picks[0] == (2.0, 'task start') and picks[-1] == (20.0, 'task end') and len(picks) <= 8
+    # task start / end always, every event of the episode (also the open at 25 s, after the task)
+    assert (2.0, 'task start') in picks and (20.0, 'task end') in picks and len(picks) <= 8
+    assert {e['t'] for e in events} <= {t for t, _ in picks}
+    many = [{'t': 2.5 + k, 'kind': 'close' if k % 2 == 0 else 'open'} for k in range(20)]
+    picks = frame_times_for_review(2.0, 20.0, {'right': many}, max_frames=8)
+    assert len(picks) == 8 and (2.0, 'task start') in picks and (20.0, 'task end') in picks
+    # a gripper closed before the task holds at its start
+    spans = arm_spans(0.0, 30.0, 2.0, 20.0, [{'t': 1.0, 'kind': 'close'}, {'t': 8.0, 'kind': 'open'}])
+    assert [s['phase'] for s in spans] == ['reset', 'hold', 'retract', 'reset']
 
 
 def merge_inputs():
@@ -68,12 +76,14 @@ def merge_inputs():
 
 def test_measured_items():
     spans, events = merge_inputs()
-    assert list(events) == ['right_close_1', 'right_open_1']
+    # both arms over the whole episode: the left close at 11 s is during the undocking
+    assert list(events) == ['right_close_1', 'right_open_1', 'left_close_1']
+    assert [e['in_task'] for e in events.values()] == [True, True, False]
     right = [(s['phase'], s['start'], s['end']) for i, s in spans.items() if s['arm'] == 'right']
     assert right == [('reset', 10.0, 12.0), ('approach', 12.0, 14.0), ('hold', 14.0, 18.0),
         ('retract', 18.0, 25.0), ('reset', 25.0, 30.0)]
     left = [s['phase'] for s in spans.values() if s['arm'] == 'left']
-    assert left == ['reset', 'approach', 'reset']
+    assert left == ['reset', 'hold', 'reset']  # closed before the task: holds
 
 
 def test_schema_and_merge():
@@ -93,6 +103,7 @@ def test_schema_and_merge():
     assert response_schema([], [])['properties']['gripper_events']['items']['properties']['event_id']['enum'] == ['none']
     text = request_text(10.0, 30.0, 12.0, 25.0, spans, events, None)
     assert 'right_close_1: right, 4.00, 20 mm (stopped while open' in text and 'right_1:' not in text
+    assert 'left_close_1: left, 1.00, 0 mm' in text and 'outside the task part' in text
 
     answer = {
         'task': {'task': 'put the cup on the saucer', 'skill': 'place', 'objects': ['cup', 'saucer'],
@@ -118,7 +129,8 @@ def test_schema_and_merge():
     assert ev[('right', 4.0)]['verb'] == '' and ev[('right', 4.0)]['measured_phase'] == 'hold'
     assert sum(e['end_s'] - e['start_s'] for e in out['events'] if e['arm'] == 'right') == 20.0
     kinds = [(k['t_s'], k['kind'], k['outcome']) for k in out['key_events']]
-    assert kinds == [(4.0, 'contact', 'success'), (8.0, 'contact', None), (8.5, 'subgoal_complete', 'success')]
+    assert kinds == [(1.0, 'contact', None), (4.0, 'contact', 'success'), (8.0, 'contact', None),
+        (8.5, 'subgoal_complete', 'success')]
     # not a success: no completion time
     answer['task']['outcome'] = 'failure'
     assert merge_annotation(answer, 10.0, 12.0, 25.0, spans, events)['tasks'][0]['completed_at_s'] is None
@@ -184,9 +196,9 @@ def test_bangs():
         'state_changes': [], 'recoveries': [], 'issues': [], 'objects': [], 'scene_graph': []}
     out = merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [12.0, 25.0])
     kinds = [(k['t_s'], k['kind']) for k in out['key_events']]
-    assert kinds == [(2.0, 'phase'), (4.0, 'contact'), (8.0, 'contact'), (15.0, 'phase')]
+    assert kinds == [(1.0, 'contact'), (2.0, 'phase'), (4.0, 'contact'), (8.0, 'contact'), (15.0, 'phase')]
     # end defaults to the last span's end: a bang at 30 s is outside
-    assert len(merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [30.0])['key_events']) == 2
+    assert len(merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [30.0])['key_events']) == 3
 
 
 if __name__ == '__main__':

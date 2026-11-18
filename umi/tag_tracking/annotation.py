@@ -116,9 +116,13 @@ def arm_spans(start: float, end: float, task_start: float, task_end: float,
     Spans of one arm covering [start, end), half-open, never overlapping:
     'reset' before task_start and from task_end, inside the task split at the
     events within it: 'approach' (before a close), 'hold' (between a close
-    and an open), 'retract' (after an open, or after the last event).
+    and an open), 'retract' (after an open, or after the last event). A
+    gripper that closed before the task (its last event before task_start is
+    a close) holds at the start of the task.
     """
     inside = [e for e in events if task_start < e['t'] < task_end]
+    before = [e for e in events if e['t'] <= task_start]
+    carried = 'close' if before and before[-1]['kind'] == 'close' else None
     spans = list()
     if task_start > start:
         spans.append({'start': start, 'end': task_start, 'phase': 'reset'})
@@ -127,13 +131,13 @@ def arm_spans(start: float, end: float, task_start: float, task_end: float,
         if b <= a:
             continue
         nxt = inside[k] if k < len(inside) else None
-        prev = inside[k - 1] if k > 0 else None
+        state = inside[k - 1]['kind'] if k > 0 else carried
         if nxt is not None and nxt['kind'] == 'close':
             phase = 'approach'
-        elif prev is not None and prev['kind'] == 'close':
+        elif state == 'close':
             phase = 'hold'
         else:
-            phase = 'retract' if prev is not None else 'approach'
+            phase = 'retract' if k > 0 else 'approach'
         spans.append({'start': a, 'end': b, 'phase': phase})
     if end > task_end:
         spans.append({'start': task_end, 'end': end, 'phase': 'reset'})
@@ -143,22 +147,23 @@ def arm_spans(start: float, end: float, task_start: float, task_end: float,
 def frame_times_for_review(task_start: float, task_end: float, events: Dict[str, List[dict]],
         max_frames: int = 12) -> List[Tuple[float, str]]:
     """
-    Head video times to show for the visual check: task start / end, every
-    gripper event inside the task, filled up with evenly spaced task times.
-    Returns sorted [(time, reason)], at most max_frames.
+    Head video times to show for the visual check: task start and end
+    (always), every gripper event given (the whole episode's; evenly thinned
+    when there are more than max_frames - 2), filled up with evenly spaced
+    task times. Returns sorted [(time, reason)], at most max_frames.
     """
-    picks = [(task_start, 'task start'), (task_end, 'task end')]
+    picks = list()
     for arm, arm_events in events.items():
         for e in arm_events:
-            if task_start < e['t'] < task_end:
-                picks.append((e['t'], f"{arm} gripper {e['kind']}"
-                    + (" (fingers stop open: holding)" if e.get('holding') else
-                       " (fingers nearly closed: empty or a thin object)" if e['kind'] == 'close' else '')))
+            note = (" (fingers stop open: holding)" if e.get('holding') else
+                " (fingers nearly closed: empty or a thin object)" if e['kind'] == 'close' else '')
+            picks.append((e['t'], f"{arm} gripper {e['kind']}{note}"))
     picks = sorted(picks)
-    if len(picks) > max_frames:
-        # keep start, end and evenly spread events
-        keep = np.unique(np.round(np.linspace(0, len(picks) - 1, max_frames)).astype(int))
+    room = max(0, max_frames - 2)
+    if len(picks) > room:
+        keep = np.unique(np.round(np.linspace(0, len(picks) - 1, room)).astype(int)) if room else []
         picks = [picks[i] for i in keep]
+    picks += [(task_start, 'task start'), (task_end, 'task end')]
     n_fill = max_frames - len(picks)
     if n_fill > 0:
         for t in np.linspace(task_start, task_end, n_fill + 2)[1:-1]:
@@ -185,7 +190,9 @@ def measured_items(start: float, end: float, task_start: float, task_end: float,
         arm_events: Dict[str, List[dict]]) -> Tuple[Dict[str, dict], Dict[str, dict]]:
     """
     Ids for what the model names: spans '<arm>_<k>' over the whole episode
-    (arm_spans) and gripper events '<arm>_<close|open>_<k>' inside the task.
+    (arm_spans) and gripper events '<arm>_<close|open>_<k>' of both arms over
+    the whole episode ('in_task': inside the task interval; a release can
+    end just after the last bang, a grasp happen during the undocking).
     """
     spans, events = dict(), dict()
     for arm, ev in arm_events.items():
@@ -193,9 +200,10 @@ def measured_items(start: float, end: float, task_start: float, task_end: float,
             spans[f"{arm}_{k + 1}"] = {**s, 'arm': arm}
         count = {'close': 0, 'open': 0}
         for e in ev:
-            if task_start < e['t'] < task_end:
+            if start <= e['t'] < end:
                 count[e['kind']] += 1
-                events[f"{arm}_{e['kind']}_{count[e['kind']]}"] = {**e, 'arm': arm}
+                events[f"{arm}_{e['kind']}_{count[e['kind']]}"] = {**e, 'arm': arm,
+                    'in_task': bool(task_start < e['t'] < task_end)}
     return spans, events
 
 
@@ -253,7 +261,8 @@ def request_text(start: float, end: float, task_start: float, task_end: float,
         if e['kind'] == 'close':
             note = (' (stopped while open: something between the fingers)' if e['holding'] else
                 f" (closed to under {DEFAULTS['holding_width'] * 1000:.0f} mm: empty, or a thin object such as a sheet or an edge)")
-        lines.append(f"  {i}: {e['arm']}, {e['t'] - start:.2f}, {e['width'] * 1000:.0f} mm{note}")
+        where = '' if e.get('in_task', True) else ' [outside the task part: during docking / bang]'
+        lines.append(f"  {i}: {e['arm']}, {e['t'] - start:.2f}, {e['width'] * 1000:.0f} mm{note}{where}")
     if not events:
         lines.append("  none")
     lines.append("For each gripper event, grasped_or_released says whether a close grasped an object / an open let "

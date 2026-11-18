@@ -67,7 +67,7 @@
     </div>
     <canvas id="timeline"></canvas>
     <div class="small">Rows: task interval, spans per arm (grey reset, blue approach, orange hold, green retract),
-      key events (dashed: bangs), gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
+      gripper close / open per arm, task completion in green, bangs dashed, gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
   </div>
   <div id="right">
     <section><h2>Episode</h2><div class="kv" id="info"></div></section>
@@ -171,7 +171,7 @@ function keyEvents() {
 
 function drawTimeline() {
   const c = $('timeline'), dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth, h = 38 + ep.arms.length * 26 + 22 + ep.arms.length * 64 + 4;
+  const w = c.clientWidth, h = 38 + ep.arms.length * (26 + 18 + 64) + 12;
   if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; c.style.height = h + 'px'; }
   const g = c.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -200,23 +200,30 @@ function drawTimeline() {
       g.fillStyle = '#222'; g.fillText(text, x(s.start_s) + 3, y + 10); g.restore();
     }
   });
-  // key events
-  const yk = 38 + ep.arms.length * 26; label('events', yk + 6);
+  // gripper events, one row per arm: close (orange) / open (blue); task completion on the task row
+  const yk = 38 + ep.arms.length * 26, rows = {};
+  ep.arms.forEach((arm, k) => { rows[arm] = yk + k * 18; label(arm + ' events', rows[arm] + 6); });
   for (const k of keyEvents()) {
     if (k.measured_kind === 'bang') continue;
-    g.fillStyle = k.kind === 'subgoal_complete' ? '#1a7f37' : (k.measured_kind || k.kind) === 'open' ? '#4a7fb5' : '#c25b2a';
-    g.fillRect(x(k.t_s) - 1, yk, 3, 12);
+    if (k.kind === 'subgoal_complete') { g.fillStyle = '#1a7f37'; g.fillRect(x(k.t_s) - 1, 16, 3, 16); continue; }
+    if (!(k.arm in rows)) continue;
+    const open = (k.measured_kind || k.kind) === 'open';
+    g.fillStyle = open ? '#4a7fb5' : '#c25b2a';
+    g.fillRect(x(k.t_s) - 1, rows[k.arm], 3, 12);
+    g.fillText(open ? 'open' : 'close', x(k.t_s) + 4, rows[k.arm] + 6);
   }
-  // bangs: dashed line across the span rows, labeled in the events row
-  g.save(); g.setLineDash([3, 3]); g.strokeStyle = '#222';
+  const yEnd = yk + ep.arms.length * 18;
+  // bangs: dashed line across span and event rows
+  g.save(); g.setLineDash([3, 3]); g.strokeStyle = '#222'; g.fillStyle = '#222';
   for (const b of ep.measured.bangs) {
-    g.beginPath(); g.moveTo(x(b.t_s), 18); g.lineTo(x(b.t_s), yk + 12); g.stroke();
-    g.fillStyle = '#222'; g.fillText('bang', x(b.t_s) + 3, yk + 6);
+    g.beginPath(); g.moveTo(x(b.t_s), 16); g.lineTo(x(b.t_s), yEnd); g.stroke();
+    g.fillStyle = '#fff'; g.fillRect(x(b.t_s) + 1, 1, g.measureText('bang').width + 4, 13);
+    g.fillStyle = '#222'; g.fillText('bang', x(b.t_s) + 3, 8);
   }
   g.restore();
   // gripper opening and tracking
   ep.arms.forEach((arm, k) => {
-    const y0 = yk + 22 + k * 64, hh = 46, s = ep.signals[arm];
+    const y0 = yEnd + 8 + k * 64, hh = 46, s = ep.signals[arm];
     label(arm + ' mm', y0 + hh / 2);
     g.strokeStyle = '#eee'; g.strokeRect(x(0), y0, x(ep.duration) - x(0), hh);
     const top = ep.signals.max_width_mm || 100;
