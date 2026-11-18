@@ -5,7 +5,9 @@ it straight down to the table plane z = 0 of the world frame (yellow) and the
 cube axes.
 
 The frame: --time (seconds of the head video), else the step of the plan
-(dataset_plan.pkl) where the robot's TCP is lowest, e.g. fingertips on the table.
+(dataset_plan.pkl) where the robot's TCP is lowest, e.g. fingertips on the table;
+without a plan, the tracked head frame where it is lowest (cube pose x T_cube_tcp).
+Head video: the longest of the session, or --head_video (demos/ directory name).
 Reads tag_tracking.pkl (cube and head poses), tag_tracking/gripper_tcp.json
 (T_cube_wrist, T_wrist_tcp), the tag tracking config.
 Also the gripper's own wrist camera frame at the same time with the TCP
@@ -89,9 +91,10 @@ def wrist_view(config, session, head, track_time, name, T_wrist_tcp, T_wrist_com
 @click.option('-r', '--robot', type=int, default=None, help='Robot index (0 right, 1 left), default both')
 @click.option('-t', '--time', 'time_sec', type=float, default=None,
     help='Head video time (s), default the plan step with the lowest TCP (of both: lowest higher one)')
+@click.option('--head_video', default=None, help='Head video (demos/ directory name), default the longest')
 @click.option('--compare_tcp', type=float, nargs=2, default=None,
     help='Also draw a TCP at (0, Y, Z) in the wrist camera frame (m): Y Z')
-def main(input, config, robot, time_sec, compare_tcp):
+def main(input, config, robot, time_sec, compare_tcp, head_video):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     camera = config['cameras'][config['head_camera']]
@@ -100,8 +103,24 @@ def main(input, config, robot, time_sec, compare_tcp):
     robots = list(range(len(names))) if robot is None else [robot]
     tcp_calibration = json.load(session.joinpath('tag_tracking', 'gripper_tcp.json').open('r'))
 
-    head = [x for x in get_session_videos(session) if x['camera_serial'] == config['head_camera']][0]
+    heads = [x for x in get_session_videos(session) if x['camera_serial'] == config['head_camera']]
+    head = [x for x in heads if x['name'] == head_video][0] if head_video else \
+        max(heads, key=lambda x: x['end_timestamp'] - x['start_timestamp'])
+    print(f"head video {head['name']}")
     track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
+    if time_sec is None and not session.joinpath('dataset_plan.pkl').is_file():
+        # lowest TCP (higher of the selected robots) over tracked head frames
+        ok = track['head']['is_valid'].copy()
+        z = np.full(len(track['time']), -np.inf)
+        for r in robots:
+            body = track['bodies'][names[r]]
+            ok &= body['is_valid_world']
+            tcp_z = (body['T_world_body'] @ np.array(tcp_calibration[names[r]]['T_cube_tcp']))[:, 2, 3]
+            z = np.maximum(z, tcp_z)
+        z[~ok] = np.inf
+        i = int(np.argmin(z))
+        time_sec = float(track['time'][i])
+        print(f"tracked frame with the lowest TCP (no dataset_plan.pkl): z {z[i] * 100:.1f} cm at head video {time_sec:.2f}s")
     if time_sec is None:
         plan = pickle.load(session.joinpath('dataset_plan.pkl').open('rb'))
         z, t = min((max(e['grippers'][r]['tcp_pose'][k, 2] for r in robots), e['episode_timestamps'][k])

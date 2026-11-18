@@ -1,7 +1,7 @@
 # Gripper hardware at station1 (2026-11-18), for umi.common.gripper_config_util.load_gripper_config.
-# Same two grippers as on 2026-11-16 (gripper_config.yaml), now in the other hands; the
-# gripper with fingers 6 / 7 has a new wrist camera. Finger tags from the wrist videos
-# (scripts_tag_tracking/inspect_tags.py): image-left / image-right finger tag.
+# Left hand: the 2026-11-16 right gripper (gripper_config.yaml) with its camera. Right hand:
+# a new gripper. Finger tags from the wrist videos (scripts_tag_tracking/inspect_tags.py):
+# image-left / image-right finger tag.
 
 # finger tag z distance from camera [m], measured median 0.0784-0.0797
 nominal_z: 0.079
@@ -12,11 +12,13 @@ cam_to_mount_offset: 0.01465
 tcp_offset: 0.17735
 
 grippers:
-  C3501326500348:   # right hand: gripper with fingers 6 / 7 (left hand on 2026-11-16, then camera C3501326502891)
+  C3501326500348:   # right hand: new gripper
     gripper_id: 0
     left_finger_tag_id: 6
     right_finger_tag_id: 7
-    finger_tag_to_tip: 0.113    # fingertips 0.192 m measured on this gripper 2026-11-17
+    # TCP as measured on the 2026-11-16 grippers (same design): fingertips 192 mm in front
+    # of the lens, 75 mm below its centre (shared values above)
+    finger_tag_to_tip: 0.113
   C3501326029433:   # left hand: gripper with fingers 0 / 1 and this camera (right hand on 2026-11-16)
     gripper_id: 1
     left_finger_tag_id: 0

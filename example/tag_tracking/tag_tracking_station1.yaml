@@ -1,13 +1,16 @@
 # Tag tracking config for station1 (2026-11-18), see umi/tag_tracking/config.py.
-# New environment (head_mapping), grippers in the other hands, new right wrist camera.
+# New environment (head_mapping); yesterday's right gripper (cube 2-5, camera C3501326029433)
+# now in the left hand; a new right gripper (cube 8-11, fingers 6 / 7, camera C3501326500348).
 # Tags per video from scripts_tag_tracking/inspect_tags.py.
 aruco_config: aruco_config.yaml
 corner_noise: corner_noise.json
 gripper_config: gripper_config_station1.yaml
 
 head_camera: C3501326502664
-# setup calibration (tag map, cube shapes, cube -> wrist -> TCP) not done yet for station1:
-# scripts_tag_tracking/calibrate_setup.py on a station1 session, then set it here
+# setup calibration from the station1 tool_handling session (calibrate_setup.py), the left
+# cube's shape from setup_20261116 (same cube; its tag 3 faces away from the head here):
+# --body_shape left_cube=setup_20261116/bodies.json:right_cube
+setup_calibration: setup_station1
 head_imu:
   cam_imu_calibration: openicc/head/cam_imu/cam_imu_calib_result_GX010298.json
   noise_setting: head_gopro12_wide_fisheye_setting_720.yaml
