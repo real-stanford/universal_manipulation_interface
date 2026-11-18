@@ -6,8 +6,9 @@ From one session of the setup, processed up to segment_episodes
 (run_tag_tracking_pipeline.py --stop_after segment_episodes):
 1. environment tag map from the head camera walk past the tags
    (demos/head_mapping_*/tag_corners.pkl, all frames);
-2. cube shapes from the head task video(s), at most per_pair frames per pair
-   of cube tags seen together (rarely seen pairs keep all their frames);
+2. cube shapes from one head task video (the longest, or --head_video when
+   the take was recorded in several head files), at most per_pair frames per
+   pair of cube tags seen together (rarely seen pairs keep all their frames);
 3. corner noise model and rolling shutter line delay from those frames
    (readout time from the head video's GoPro metadata SensorReadoutTime, only
    the readout direction is estimated);
@@ -77,9 +78,11 @@ from umi.tag_tracking.setup_calibration import (frames_with_neighbors, select_cu
 @click.option('--search_line_delay', is_flag=True, default=False, help='Ignore the readout time, search the line delay')
 @click.option('-ws', '--wrist_sync', default=None,
     help='wrist_sync.json of a previous run of this session: wrist clocks with the motion sync correction')
+@click.option('--head_video', default=None,
+    help='Head task video to calibrate from (demos/ directory name), default the longest')
 @click.option('-j', '--num_workers', type=int, default=None, help='Worker processes, default all cores')
 def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tcp_only, readout_ms,
-        search_line_delay, wrist_sync, num_workers):
+        search_line_delay, wrist_sync, head_video, num_workers):
     t_start = time.time()
     output = pathlib.Path(os.path.expanduser(output)).absolute()
     config = load_tag_tracking_config(config)
@@ -132,8 +135,15 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
     # 2. cubes: head task videos, balanced over tag pairs
     videos = get_session_videos(session)
     heads = [x for x in videos if x['camera_serial'] == config['head_camera']]
-    assert len(heads) == 1, f"one head task video expected for the setup calibration, found {len(heads)}"
-    head = heads[0]
+    assert len(heads) > 0, "no head task video"
+    if head_video is not None:
+        heads_named = [x for x in heads if x['name'] == head_video]
+        assert heads_named, f"--head_video {head_video} not among {[x['name'] for x in heads]}"
+        head = heads_named[0]
+    else:
+        head = max(heads, key=lambda x: x['end_timestamp'] - x['start_timestamp'])
+    print(f"head task video: {head['name']} ({head['end_timestamp'] - head['start_timestamp']:.0f} s)"
+        + (f", not used: {', '.join(x['name'] for x in heads if x is not head)}" if len(heads) > 1 else ''))
     corrections = dict()
     if wrist_sync is not None:
         corrections = wrist_corrections(json.load(open(os.path.expanduser(wrist_sync), 'r')), head['name'])
