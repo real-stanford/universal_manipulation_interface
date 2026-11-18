@@ -17,7 +17,7 @@ head_imu:
   imu_time_offset: gpmf
 gripper_imu:
   C3501326500348:   # right hand (OpenICC cam376, 2026-11-18)
-    cam_imu_calibration: openicc/cam376/cam_imu/cam_imu_calib_result_GX019220.json
+    cam_imu_calibration: openicc/cam376/cam_imu/cam_imu_calib_result_GX019252.json
     noise_setting: gopro12_wide_fisheye_setting_720_C3501326500348.yaml
     imu_time_offset: gpmf
   C3501326029433:   # left hand (OpenICC gripper2)
