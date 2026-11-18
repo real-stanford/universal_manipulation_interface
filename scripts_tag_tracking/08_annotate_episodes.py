@@ -23,6 +23,8 @@ Writes per episode, in <output> (default <session>/tag_tracking/annotations):
 seconds from the episode's first head frame; episode_id is set by the delivery
 export) and <head video>_ep<k>_frames.jpg (the frames Claude saw, for review).
 Episodes already annotated are skipped unless --overwrite.
+Labels are per episode; 09_normalize_labels.py then gives the same thing the
+same name across episodes.
 --dry_run writes the frame sheet and the request text, no API call.
 
 Needs the anthropic package and ANTHROPIC_API_KEY.
@@ -243,6 +245,10 @@ def main(input, config, output, episodes, task_prompt, model, effort, max_frames
                 'given_prompt': task_prompt,
                 **merge_annotation(answer, e['start'], e['task_start'], e['task_end'], spans, events),
                 'frames_seen': labels,
+                # inputs of merge_annotation, to rebuild the layers after 09_normalize_labels.py
+                'measured': {'start': e['start'], 'task_start': e['task_start'], 'task_end': e['task_end'],
+                    'spans': spans, 'events': events},
+                'model_answer': answer,
                 'created_ts_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             json.dump(annotation, out_path.open('w'), indent=2)

@@ -307,3 +307,140 @@ def merge_annotation(answer: dict, start: float, task_start: float, task_end: fl
         'objects': answer['objects'],
         'scene_graph': answer['scene_graph'],
     }
+
+
+# ---------------------------------------------------------------- vocabulary across episodes
+# The visual check labels each episode on its own, so the same object / action /
+# task can come back in different words. A text-only pass over all labels of
+# the takes groups the strings that name the same thing (vocabulary); the
+# grouping is applied here in code, so a label can only become another label
+# that was in the same group.
+UNNAMED = {'', 'unknown', 'none', 'n/a'}
+
+
+def _named(s) -> bool:
+    return isinstance(s, str) and s.strip().lower() not in UNNAMED
+
+
+def label_inventory(answers: Sequence[dict]) -> dict:
+    """
+    Distinct strings of the model answers per category with their counts:
+    'objects' (objects and places: task objects, span object / destination,
+    gripper event objects, state change objects, object names, with the
+    descriptions seen), 'phrases' (span verbs, gripper event labels), 'tasks'
+    (task sentences with skill, success predicate and objects seen).
+    """
+    objects, phrases, tasks = dict(), dict(), dict()
+
+    def add(table, s, **context):
+        if not _named(s):
+            return
+        entry = table.setdefault(s, {'count': 0, **{k: list() for k in context}})
+        entry['count'] += 1
+        for k, v in context.items():
+            for x in (v if isinstance(v, list) else [v]):
+                if _named(x) and x not in entry[k]:
+                    entry[k].append(x)
+
+    for a in answers:
+        task = a['task']
+        add(tasks, task['task'], skill=task['skill'], success_predicate=task['success_predicate'], objects=task['objects'])
+        for s in task['objects']:
+            add(objects, s, descriptions=[])
+        for s in a['spans']:
+            add(phrases, s['verb'])
+            add(objects, s['object'], descriptions=[])
+            add(objects, s['destination'], descriptions=[])
+        for x in a['gripper_events']:
+            add(phrases, x['label'])
+            add(objects, x['object'], descriptions=[])
+        for x in a['state_changes']:
+            add(objects, x['object'], descriptions=[])
+        for x in a['objects']:
+            add(objects, x['name'], descriptions=x['description'])
+    return {'objects': objects, 'phrases': phrases, 'tasks': tasks}
+
+
+def vocabulary_schema(inventory: dict) -> dict:
+    """
+    Structured output of the vocabulary pass: groups per category, each with a
+    canonical label and the inventory strings it covers (enum: only strings
+    that exist).
+    """
+    string = {'type': 'string'}
+
+    def obj(properties):
+        return {'type': 'object', 'properties': properties, 'required': list(properties), 'additionalProperties': False}
+
+    def aliases(category):
+        return {'type': 'array', 'items': {'type': 'string', 'enum': list(inventory[category]) or ['none']}}
+
+    return obj({
+        'objects': {'type': 'array', 'items': obj({'name': string, 'description': string, 'aliases': aliases('objects')})},
+        'phrases': {'type': 'array', 'items': obj({'phrase': string, 'aliases': aliases('phrases')})},
+        'tasks': {'type': 'array', 'items': obj({'task': string, 'skill': {'type': 'string', 'enum': TASK_FAMILIES},
+            'success_predicate': string, 'instruction_variants': {'type': 'array', 'items': string},
+            'aliases': aliases('tasks')})},
+    })
+
+
+def vocabulary_maps(vocabulary: dict, inventory: dict) -> Tuple[dict, List[str]]:
+    """
+    String -> canonical entry per category. Inventory strings in no group map to
+    themselves; a string in two groups keeps the first. Returns (maps, warnings).
+    """
+    keys = {'objects': 'name', 'phrases': 'phrase', 'tasks': 'task'}
+    maps, warnings = dict(), list()
+    for category, key in keys.items():
+        m = dict()
+        for entry in vocabulary.get(category, []):
+            for s in [entry[key]] + list(entry['aliases']):
+                if s in m and m[s][key] != entry[key]:
+                    warnings.append(f"{category}: '{s}' in two groups ('{m[s][key]}', '{entry[key]}'), kept the first")
+                    continue
+                m[s] = entry
+        for s in inventory.get(category, {}):
+            if s not in m:
+                warnings.append(f"{category}: '{s}' not in the vocabulary, kept as is")
+        maps[category] = m
+    return maps, warnings
+
+
+def apply_vocabulary(answer: dict, maps: dict) -> dict:
+    """
+    The model answer with every object, phrase and task replaced by its
+    canonical label; a task takes the group's skill, success predicate and
+    instruction variants, an object the group's description.
+    """
+    import copy
+    a = copy.deepcopy(answer)
+
+    def name(s):
+        return maps['objects'][s]['name'] if s in maps['objects'] else s
+
+    def phrase(s):
+        return maps['phrases'][s]['phrase'] if s in maps['phrases'] else s
+
+    def unique(xs):
+        return list(dict.fromkeys(xs))
+
+    t = a['task']
+    if t['task'] in maps['tasks']:
+        g = maps['tasks'][t['task']]
+        t.update({'task': g['task'], 'skill': g['skill'], 'success_predicate': g['success_predicate'],
+            'instruction_variants': list(g['instruction_variants'])})
+    t['objects'] = unique(name(s) for s in t['objects'])
+    for s in a['spans']:
+        s.update({'verb': phrase(s['verb']), 'object': name(s['object']), 'destination': name(s['destination'])})
+    for x in a['gripper_events']:
+        x.update({'label': phrase(x['label']), 'object': name(x['object'])})
+    for x in a['state_changes']:
+        x['object'] = name(x['object'])
+    objects = dict()
+    for x in a['objects']:
+        n = name(x['name'])
+        if n not in objects:
+            objects[n] = {'name': n, 'description': maps['objects'][x['name']]['description']
+                if x['name'] in maps['objects'] else x['description']}
+    a['objects'] = list(objects.values())
+    return a

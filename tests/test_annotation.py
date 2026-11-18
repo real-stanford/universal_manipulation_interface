@@ -10,7 +10,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from umi.tag_tracking.annotation import (gripper_events, arm_spans, turning_points, frame_times_for_review,
-    measured_items, response_schema, request_text, merge_annotation)
+    measured_items, response_schema, request_text, merge_annotation, label_inventory, vocabulary_schema,
+    vocabulary_maps, apply_vocabulary)
 
 FPS = 60000 / 1001
 
@@ -123,10 +124,59 @@ def test_schema_and_merge():
     assert merge_annotation(answer, 10.0, 12.0, 25.0, spans, events)['tasks'][0]['completed_at_s'] is None
 
 
+def answer_with(task, objects, verb, label):
+    return {
+        'task': {'task': task, 'skill': 'place', 'objects': objects, 'success_predicate': 'cup on saucer',
+            'outcome': 'success', 'completed_at_s': 5.0, 'instruction_variants': ['a', 'b'], 'confidence': 0.9},
+        'spans': [{'span_id': 'right_2', 'verb': verb, 'object': objects[0], 'destination': 'unknown',
+            'contribution': 'advancing', 'progress': 0.5, 'confidence': 0.8}],
+        'gripper_events': [{'event_id': 'right_close_1', 'label': label, 'object': objects[0],
+            'grasped_or_released': True, 'outcome': 'success', 'note': ''}],
+        'state_changes': [], 'recoveries': [], 'issues': [],
+        'objects': [{'name': o, 'description': f'{o} seen'} for o in objects], 'scene_graph': []}
+
+
+def test_vocabulary():
+    answers = [answer_with('put the blue cup on the saucer', ['blue cup', 'saucer'], 'grasp blue cup', 'grasp blue cup'),
+               answer_with('place blue mug onto saucer', ['the blue mug', 'saucer'], 'pick up blue mug', 'grasp blue mug'),
+               answer_with('put the red cup on the saucer', ['red cup', 'saucer'], 'grasp red cup', 'grasp red cup')]
+    inv = label_inventory(answers)
+    assert inv['objects']['saucer']['count'] == 3 + 3 and 'unknown' not in inv['objects']
+    assert set(inv['phrases']) == {'grasp blue cup', 'pick up blue mug', 'grasp blue mug', 'grasp red cup'}
+    schema = vocabulary_schema(inv)
+    assert set(schema['properties']['objects']['items']['properties']['aliases']['items']['enum']) == set(inv['objects'])
+    vocab = {
+        'objects': [{'name': 'blue cup', 'description': 'blue ceramic cup', 'aliases': ['blue cup', 'the blue mug']},
+                    {'name': 'red cup', 'description': 'red cup', 'aliases': ['red cup']},
+                    {'name': 'saucer', 'description': 'white saucer', 'aliases': ['saucer']}],
+        'phrases': [{'phrase': 'grasp blue cup', 'aliases': ['grasp blue cup', 'pick up blue mug', 'grasp blue mug',
+            'grasp red cup']}],  # wrong: red cup also listed here and below
+        'tasks': [{'task': 'place blue cup on saucer', 'skill': 'place', 'success_predicate': 'blue cup rests on saucer',
+            'instruction_variants': ['set the blue cup on the saucer', 'put blue cup onto saucer'],
+            'aliases': ['put the blue cup on the saucer', 'place blue mug onto saucer']}],
+    }
+    vocab['phrases'].append({'phrase': 'grasp red cup', 'aliases': ['grasp red cup']})
+    maps, warnings = vocabulary_maps(vocab, inv)
+    # the label in two groups keeps the first; the red cup task is in no group
+    assert any("'grasp red cup' in two groups" in w for w in warnings)
+    assert any("'put the red cup on the saucer' not in the vocabulary" in w for w in warnings)
+    b = apply_vocabulary(answers[1], maps)
+    assert b['task']['task'] == 'place blue cup on saucer' and b['task']['success_predicate'] == 'blue cup rests on saucer'
+    assert b['task']['objects'] == ['blue cup', 'saucer']
+    assert b['spans'][0]['verb'] == 'grasp blue cup' and b['spans'][0]['object'] == 'blue cup'
+    assert b['spans'][0]['destination'] == 'unknown'
+    assert b['gripper_events'][0]['label'] == 'grasp blue cup'
+    assert b['objects'] == [{'name': 'blue cup', 'description': 'blue ceramic cup'}, {'name': 'saucer', 'description': 'white saucer'}]
+    assert answers[1]['task']['task'] == 'place blue mug onto saucer'  # input untouched
+    c = apply_vocabulary(answers[2], maps)
+    assert c['task']['task'] == 'put the red cup on the saucer' and c['task']['objects'] == ['red cup', 'saucer']
+
+
 if __name__ == '__main__':
     test_turning_points()
     test_events()
     test_spans()
     test_measured_items()
     test_schema_and_merge()
+    test_vocabulary()
     print("all passed")
