@@ -261,20 +261,24 @@ def task_interval(times: np.ndarray, cube_positions: Sequence[np.ndarray], dock_
     return float(times[inside[k[0]]]), float(times[inside[k[-1]]])
 
 
-def between_bangs(interval: Tuple[float, float], bangs: Sequence[float]) -> Tuple[Tuple[float, float], List[str]]:
+def between_bangs(interval: Tuple[float, float], bangs: Sequence[float],
+        episode: Optional[Tuple[float, float]] = None) -> Tuple[Tuple[float, float], List[str]]:
     """
     Remove the bang ritual from a task interval: bangs are made right after
     leaving the dock and right before returning (both grippers held up to the
-    head camera's microphone, where the cubes leave its view). The start moves
-    to the first bang (if it is in the first half of the interval), the end to
-    the last bang (if in the second half): first to last bang, as the bang
-    boundary of 00b, so bangs inside the task (a collision) do not cut it.
-    Returns the interval and, per side, 'bang' or 'dock' (no bang there: the
-    dock boundary is kept).
+    head camera's microphone, where the cubes leave its view). Bangs are looked
+    for in the whole dock-to-dock episode (default: the interval): the work and
+    the bangs can be close to the dock, still within dock_exit_distance. The
+    task starts at the first bang in the episode's first half and ends at the
+    last bang in its second half (first to last bang, as the bang boundary of
+    00b, so bangs inside the task do not cut it); a side without a bang keeps
+    the interval's boundary (dock exit / return). Returns the interval and,
+    per side, 'bang' or 'dock'.
     """
     start, end = interval
-    middle = 0.5 * (start + end)
-    inside = [b for b in bangs if start <= b <= end]
+    lo, hi = episode if episode is not None else interval
+    middle = 0.5 * (lo + hi)
+    inside = [b for b in bangs if lo <= b <= hi]
     early = [b for b in inside if b < middle]
     late = [b for b in inside if b >= middle]
     new_start = min(early) if early else start

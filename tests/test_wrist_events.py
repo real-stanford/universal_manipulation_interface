@@ -234,6 +234,8 @@ def test_dock_to_dock():
     assert between_bangs((8.0, 27.0), [2.0, 9.5, 10.0, 16.0, 19.0, 25.0, 40.0]) == ((9.5, 25.0), ['bang', 'bang'])
     assert between_bangs((8.0, 27.0), [25.0]) == ((8.0, 25.0), ['dock', 'bang'])
     assert between_bangs((8.0, 27.0), []) == ((8.0, 27.0), ['dock', 'dock'])
+    # the start bang before the dock exit (work close to the dock): found in the dock-to-dock episode
+    assert between_bangs((19.0, 27.0), [8.0, 25.0], episode=(5.0, 30.0)) == ((8.0, 25.0), ['bang', 'bang'])
 
 
 def test():

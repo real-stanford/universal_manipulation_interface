@@ -13,8 +13,9 @@ Cube positions: tracked world poses (tag_tracking.pkl, 03/03b), a cube not
 tracked in a frame keeps its last known state. Dock tag positions: the
 environment tag map (tag_tracking/bodies.json).
 Adds 'task_start' / 'task_end' (head video seconds, or null if the cubes never
-left the dock area) and 'task_boundary' ([start, end]: 'dock' or 'bang') to
-every episode of tag_tracking/episodes.json;
+left the dock area), 'task_boundary' ([start, end]: 'dock' or 'bang') and
+'task_review' (sides with more than REVIEW_SEC removed at the dock, to check)
+to every episode of tag_tracking/episodes.json;
 06_export_dataset_plan.py exports that interval.
 
 python scripts_tag_tracking/03t_trim_docking.py -i data_workspace/session -c umi_calib/tag_tracking.yaml
@@ -36,6 +37,10 @@ import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos
 from umi.tag_tracking.episodes import task_interval, between_bangs
+
+
+# more than this removed at a dock boundary (no bang there): flagged for review
+REVIEW_SEC = 3.0
 
 
 def mmss(t):
@@ -78,16 +83,22 @@ def main(input, config, bang_ritual):
             interval = task_interval(times, positions, dock_positions, e['start'], e['end'], exit_distance)
             sources = ['dock', 'dock']
             if interval is not None and bang_ritual:
-                interval, sources = between_bangs(interval, video['bangs'])
+                interval, sources = between_bangs(interval, video['bangs'], (e['start'], e['end']))
             e['task_start'], e['task_end'] = (None, None) if interval is None else interval
             e['task_boundary'] = None if interval is None else sources
             if interval is None:
                 print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: cubes never left the dock area, no task")
                 continue
             durations.append(interval[1] - interval[0])
+            removed = (interval[0] - e['start'], e['end'] - interval[1])
+            review = [side for side, r, src in zip(('start', 'end'), removed, sources) if src == 'dock' and r > REVIEW_SEC]
+            e['task_review'] = review
             print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: task {mmss(interval[0])}-{mmss(interval[1])} "
-                f"({interval[1] - interval[0]:.1f}s; removed {interval[0] - e['start']:.1f}s + {e['end'] - interval[1]:.1f}s; "
-                f"start at {sources[0]}, end at {sources[1]})")
+                f"({interval[1] - interval[0]:.1f}s; removed {removed[0]:.1f}s + {removed[1]:.1f}s; "
+                f"start at {sources[0]}, end at {sources[1]})"
+                + (f"; REVIEW: more than {REVIEW_SEC:.0f}s removed at the dock ({', '.join(review)})" if review else ''))
+        n_review = sum(1 for e in video['episodes'] if e.get('task_review'))
+        print(f"{head['name']}: {n_review} episodes flagged for review")
         print(f"{head['name']}: {len(durations)} of {len(video['episodes'])} episodes with a task, "
             + (f"{min(durations):.1f}-{max(durations):.1f}s, total {sum(durations):.0f}s" if durations else 'none'))
 
