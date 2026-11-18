@@ -7,8 +7,6 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import json
-import tempfile
 import numpy as np
 from umi.tag_tracking.camera_metadata import fisheye_fov_deg, camera_record
 
@@ -24,26 +22,22 @@ def test_fov():
 
 
 class FakeCamera:
-    def __init__(self, path):
-        self.intrinsics_json = path
-        self.image_size = (2704, 2028)
-        self.K = np.array([[1200.0, 0, 1352], [0, 1200.0, 1014], [0, 0, 1]])
-        self.D = np.array([0.05, 0.02, 0.006, -0.011])
+    image_size = (2704, 2028)
+    K = np.array([[1200.0, 0, 1352], [0, 1200.0, 1014], [0, 0, 1]])
+    D = np.array([0.05, 0.02, 0.006, -0.011])
 
 
 def test_record():
-    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
-        json.dump({'nr_calib_images': 25, 'final_reproj_error': 0.425}, f)
-    try:
-        exif = {'GoPro:Model': 'HERO12 Black', 'GoPro:FieldOfView': 'Wide', 'GoPro:FirmwareVersion': 'H23.01',
-            'UserData:LensSerialNumber': 'L1', 'GoPro:ElectronicImageStabilization': 'N/A'}
-        r = camera_record('right_wrist', 'C1', exif, 59.94005994, FakeCamera(f.name))
-    finally:
-        os.unlink(f.name)
+    exif = {'GoPro:Model': 'HERO12 Black', 'GoPro:FieldOfView': 'Wide', 'GoPro:FirmwareVersion': 'H23.01',
+        'UserData:LensSerialNumber': 'L1', 'GoPro:ElectronicImageStabilization': 'N/A'}
+    r = camera_record('right_wrist', 'C1', exif, 59.94005994, FakeCamera())
     assert all(isinstance(v, str) for v in r.values())
-    assert r['model'] == 'GoPro HERO12 Black' and r['lens'] == 'Wide (fisheye)' and r['resolution'] == '2704x2028'
-    assert r['frame_rate_hz'] == '59.94006' and r['intrinsics_fx_fy_cx_cy_px'].startswith('1200.0000,1200.0000,1352')
-    assert '25 board views' in r['intrinsics_source'] and r['field_of_view_deg'].startswith('horizontal ')
+    assert r['model'] == 'GoPro HERO12 Black' and r['lens'] == 'Wide' and r['stabilization'] == 'off'
+    assert r['resolution'] == '2704x2028' and r['frame_rate_hz'] == '59.94006' and r['intrinsics_model'] == 'kannala_brandt'
+    assert r['fx'] == '1200.0000' and r['k1'] == '0.05000000' and float(r['fov_horizontal_deg']) > 100
+    assert 'lens_serial' not in r and 'intrinsics_source' not in r
+    # values the file does not have are left out
+    assert 'firmware' not in camera_record('head', 'C2', {'GoPro:Model': 'HERO12 Black'}, 59.94, FakeCamera())
 
 
 if __name__ == '__main__':

@@ -9,10 +9,11 @@ file per episode (JSON schemas umi.msg.* and foxglove.*), viewable in Foxglove:
   robot{i}/imu                    umi.msg.ImuSample     wrist GoPro IMU, raw GPMF axes, all samples
   /cameras/camera{j}/video        foxglove.CompressedVideo  H.265, the GoPro's own stream
   metadata 'recording'            episode, robot, camera and frame information
-  metadata 'camera{j}'             (with -c) role, serial, model, lens, field of view, resolution,
-                                   frame rate, fisheye intrinsics and their calibration
-  metadata 'sync'                  (with -c) sync method, accuracy, per camera the video frame
-                                   index of the episode's first step (the same instant in all files)
+  metadata 'camera{j}'             (with -c) role, serial, model, firmware, lens, stabilization,
+                                   field of view, resolution, frame rate, Kannala-Brandt intrinsics
+  metadata 'sync'                  (with -c) method, per camera the video frame of the episode's
+                                   first step (the same instant in all files) and its clock offset,
+                                   per wrist camera the motion sync uncertainty
 
 Robots in robot_index order (UMI: 0 right, 1 left); cameras as in the plan:
 wrist cameras in robot order, then the head camera.
@@ -50,9 +51,7 @@ from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.camera_metadata import camera_record
 from umi.common.exiftool_util import ExifTool
 
-SYNC_METHOD = ("start offsets from the cameras' audio tracks (cross-correlation, 06a_estimate_audio_sync.py); "
-    "wrist cameras refined by motion: wrist gyro against the head-tracked cube rotation per episode "
-    "(03s_sync_wrists.py); IMU samples timed from the GoPro GPMF timestamps")
+SYNC_METHOD = 'audio cross-correlation, wrist motion refinement'
 
 PROFILE = 'umi'
 LIBRARY = 'umi tag tracking'
@@ -231,18 +230,17 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
                 else {f'robot{g}_tcp_in_camera_m': ','.join(f'{x:g}' for x in t) for g, t in enumerate(tcps_in_camera)}),
             'rotation': 'axis_angle',
             'units': 'm,rad',
-            'gripper_width': 'robot{i}/gripper/state per step: finger tag distance relative to fully closed (m), '
-                'from the wrist camera; range from each gripper\'s calibration video',
+            'gripper_width_unit': 'm',
+            'gripper_width_zero': 'fully closed',
         })
         for c, record in enumerate(camera_records or []):
             writer.add_metadata(f'camera{c}', record)
         if sync_record is not None:
             writer.add_metadata('sync', {
                 **sync_record,
-                **{f'camera{c}_frame_at_episode_start': str(int(camera['video_start_end'][0]))
-                    for c, camera in enumerate(cameras)},
-                **{f'camera{c}_clock_correction_ms': f"{camera.get('clock_correction_ms') or 0.0:.3f}"
-                    for c, camera in enumerate(cameras)},
+                **{f'camera{c}_sync_frame': str(int(camera['video_start_end'][0])) for c, camera in enumerate(cameras)},
+                **{f'camera{c}_offset_ms': f"{camera['clock_correction_ms']:.3f}"
+                    for c, camera in enumerate(cameras) if camera.get('clock_correction_ms') is not None},
             })
         writer.finish()
     return path
@@ -312,15 +310,14 @@ def main(input, output, episodes, config, num_workers):
                 records.append(camera_record(role, serial, info, video_fps, config['cameras'][serial]))
             camera_records[k] = records
             head = pathlib.Path(cameras[-1]['video_path']).parent.name
-            accuracy = [x.get('accuracy_ms') for name, x in sync['videos'].get(head, dict()).items()
-                if name in {pathlib.Path(c['video_path']).parent.name for c in cameras[:n_grippers]}]
-            sync_records[k] = {
-                'method': SYNC_METHOD,
-                'wrist_motion_sync': 'applied' if any(c.get('clock_correction_ms') for c in cameras[:n_grippers])
-                    else 'not applied (audio sync only)',
-                'accuracy_ms': ', '.join('-' if a is None else f'{a:.2f}' for a in accuracy) if accuracy else 'not measured',
-                'frame_rate_hz': f'{video_fps:.5f} (all cameras)',
-            }
+            # per wrist camera: the motion sync fit's uncertainty, where it was fitted
+            fits = sync['videos'].get(head, dict())
+            sync_records[k] = {'method': SYNC_METHOD if any(c.get('clock_correction_ms') for c in cameras[:n_grippers])
+                else 'audio cross-correlation'}
+            for c, camera in enumerate(cameras[:n_grippers]):
+                line = (fits.get(pathlib.Path(camera['video_path']).parent.name) or dict()).get('line')
+                if line is not None:
+                    sync_records[k][f'camera{c}_sync_sigma_ms'] = f"{line['residual_ms']:.2f}"
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_workers, len(indices)),

@@ -5,7 +5,6 @@ OpenICC fisheye calibration (umi.tag_tracking.camera_model.FisheyeCamera,
 Kannala-Brandt: r = f * (theta + k1 theta^3 + k2 theta^5 + k3 theta^7 + k4 theta^9)).
 """
 from typing import Dict, Sequence, Tuple
-import json
 import numpy as np
 
 
@@ -47,21 +46,20 @@ def camera_record(role: str, serial: str, exif: Dict, fps: float, camera) -> Dic
     k = np.asarray(camera.D).reshape(-1)
     K = camera.K
     fov = fisheye_fov_deg(K, k, camera.image_size)
-    calibration = json.load(open(camera.intrinsics_json, 'r'))
-    return {
+    record = {
         'role': role,
-        'camera_serial': serial,
+        'serial': serial,
         'model': f"GoPro {exif.get('GoPro:Model', exif.get('QuickTime:Model', ''))}".strip(),
         'firmware': str(exif.get('GoPro:FirmwareVersion', '')),
-        'lens': f"{exif.get('GoPro:FieldOfView', '')} (fisheye)".strip(),
-        'lens_serial': str(exif.get('UserData:LensSerialNumber', '')),
-        'stabilization': str(exif.get('GoPro:ElectronicImageStabilization', '')),
-        'field_of_view_deg': f"horizontal {fov['horizontal']:.1f}, vertical {fov['vertical']:.1f}, diagonal {fov['diagonal']:.1f}",
+        'lens': str(exif.get('GoPro:FieldOfView', '')),
+        'stabilization': 'off',
+        'fov_horizontal_deg': f"{fov['horizontal']:.1f}",
+        'fov_vertical_deg': f"{fov['vertical']:.1f}",
+        'fov_diagonal_deg': f"{fov['diagonal']:.1f}",
         'resolution': f"{camera.image_size[0]}x{camera.image_size[1]}",
         'frame_rate_hz': f"{fps:.5f}",
-        'intrinsics_model': 'kannala_brandt (OpenCV fisheye): r = f * (theta + k1 theta^3 + k2 theta^5 + k3 theta^7 + k4 theta^9)',
-        'intrinsics_fx_fy_cx_cy_px': ','.join(f'{x:.4f}' for x in (K[0, 0], K[1, 1], K[0, 2], K[1, 2])),
-        'intrinsics_k1_k2_k3_k4': ','.join(f'{x:.8f}' for x in k),
-        'intrinsics_source': f"OpenImuCameraCalibrator, {calibration.get('nr_calib_images')} board views, "
-            f"reprojection error {calibration.get('final_reproj_error', float('nan')):.3f} px",
+        'intrinsics_model': 'kannala_brandt',
+        'fx': f'{K[0, 0]:.4f}', 'fy': f'{K[1, 1]:.4f}', 'cx': f'{K[0, 2]:.4f}', 'cy': f'{K[1, 2]:.4f}',
+        'k1': f'{k[0]:.8f}', 'k2': f'{k[1]:.8f}', 'k3': f'{k[2]:.8f}', 'k4': f'{k[3]:.8f}',
     }
+    return {key: value for key, value in record.items() if value not in ('', 'GoPro')}
