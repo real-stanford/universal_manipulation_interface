@@ -37,6 +37,7 @@ DEFAULTS = {
     'search_ms': 100.0,        # +- range of the shift search around the audio sync
     'step_ms': 0.25,           # shift grid step, refined by a parabola
     'min_pairs': 30,           # rate pairs needed in an episode
+    'min_cover_sec': 5.0,      # s of an episode the wrist gyro must cover to fit it
 }
 
 
@@ -130,7 +131,10 @@ def sync_episodes(times: np.ndarray, obs_times: np.ndarray, rows: np.ndarray, T_
         valid: np.ndarray, episodes: Sequence[dict], gyro_times: np.ndarray, gyro_cube: np.ndarray,
         params: Dict) -> List[Tuple[dict, Optional[dict]]]:
     """
-    fit_shift per episode ({'start', 'end'} head video seconds) the gyro covers.
+    fit_shift per episode ({'start', 'end'} head video seconds), on the part
+    of it the gyro covers (with the search range to spare; at least
+    min_cover_sec, e.g. a wrist video started after the head video); the
+    returned episodes are those covered parts.
     times: head frame times; obs_times: observation_times of the cube poses.
     gyro_times: head video clock under the current sync; gyro_cube: (N,3) rad/s in the cube frame.
     """
@@ -138,9 +142,13 @@ def sync_episodes(times: np.ndarray, obs_times: np.ndarray, rows: np.ndarray, T_
     shifts = np.arange(-params['search_ms'], params['search_ms'] + 0.5 * params['step_ms'], params['step_ms']) * 1e-3
     integral = gyro_integral(gyro_times, gyro_cube)
     out = list()
+    margin = params['search_ms'] * 1e-3
     for e in episodes:
-        if not (gyro_times[0] < e['start'] and e['end'] < gyro_times[-1]):
+        start = max(e['start'], gyro_times[0] + margin)
+        end = min(e['end'], gyro_times[-1] - margin)
+        if end - start < params['min_cover_sec']:
             continue
+        e = {**e, 'start': float(start), 'end': float(end)}
         in_episode = valid & (times >= e['start']) & (times <= e['end'])
         t0, t1, omega, pair_rows = head_rotation_rates(obs_times, rows, T_world_body, in_episode,
             params['interval_frames'])
