@@ -14,7 +14,8 @@ tracked in a frame keeps its last known state. Dock tag positions: the
 environment tag map (tag_tracking/bodies.json).
 Adds 'task_start' / 'task_end' (head video seconds, or null if the cubes never
 left the dock area), 'task_boundary' ([start, end]: 'dock' or 'bang') and
-'task_review' (sides with more than REVIEW_SEC removed at the dock, to check)
+'task_removed' (s removed at start / end) and 'task_review' (sides cut at the
+dock removing more than the take's usual docking + bang ritual + 2 s, to check)
 to every episode of tag_tracking/episodes.json;
 06_export_dataset_plan.py exports that interval.
 
@@ -39,8 +40,10 @@ from umi.tag_tracking.session import get_session_videos
 from umi.tag_tracking.episodes import task_interval, between_bangs
 
 
-# more than this removed at a dock boundary (no bang there): flagged for review
-REVIEW_SEC = 3.0
+# a dock boundary (no bang there) removing this much more than the take's usual
+# docking + bang ritual (median removed at its bang boundaries) is flagged for review
+REVIEW_MARGIN_SEC = 2.0
+REVIEW_DEFAULT_SEC = 3.0
 
 
 def mmss(t):
@@ -90,15 +93,25 @@ def main(input, config, bang_ritual):
                 print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: cubes never left the dock area, no task")
                 continue
             durations.append(interval[1] - interval[0])
-            removed = (interval[0] - e['start'], e['end'] - interval[1])
-            review = [side for side, r, src in zip(('start', 'end'), removed, sources) if src == 'dock' and r > REVIEW_SEC]
-            e['task_review'] = review
-            print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: task {mmss(interval[0])}-{mmss(interval[1])} "
-                f"({interval[1] - interval[0]:.1f}s; removed {removed[0]:.1f}s + {removed[1]:.1f}s; "
-                f"start at {sources[0]}, end at {sources[1]})"
-                + (f"; REVIEW: more than {REVIEW_SEC:.0f}s removed at the dock ({', '.join(review)})" if review else ''))
-        n_review = sum(1 for e in video['episodes'] if e.get('task_review'))
-        print(f"{head['name']}: {n_review} episodes flagged for review")
+            e['task_removed'] = [interval[0] - e['start'], e['end'] - interval[1]]
+        # review flags: dock boundaries removing much more than this take's usual docking + bang ritual
+        bang_removed = [r for e in video['episodes'] if e.get('task_boundary')
+            for r, src in zip(e['task_removed'], e['task_boundary']) if src == 'bang']
+        usual = float(np.median(bang_removed)) if bang_removed else REVIEW_DEFAULT_SEC - REVIEW_MARGIN_SEC
+        limit = usual + REVIEW_MARGIN_SEC
+        for k, e in enumerate(video['episodes']):
+            e['task_review'] = list()
+            if e.get('task_boundary') is None:
+                continue
+            e['task_review'] = [side for side, r, src in zip(('start', 'end'), e['task_removed'], e['task_boundary'])
+                if src == 'dock' and r > limit]
+            print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: task {mmss(e['task_start'])}-{mmss(e['task_end'])} "
+                f"({e['task_end'] - e['task_start']:.1f}s; removed {e['task_removed'][0]:.1f}s + {e['task_removed'][1]:.1f}s; "
+                f"start at {e['task_boundary'][0]}, end at {e['task_boundary'][1]})"
+                + (f"; REVIEW: {', '.join(e['task_review'])} cut at the dock, more than {limit:.1f}s" if e['task_review'] else ''))
+        n_review = sum(1 for e in video['episodes'] if e['task_review'])
+        print(f"{head['name']}: usual removal at a bang boundary {usual:.1f}s, {n_review} episodes flagged for review "
+            f"(dock boundary removing more than {limit:.1f}s)")
         print(f"{head['name']}: {len(durations)} of {len(video['episodes'])} episodes with a task, "
             + (f"{min(durations):.1f}-{max(durations):.1f}s, total {sum(durations):.0f}s" if durations else 'none'))
 
