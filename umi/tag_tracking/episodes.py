@@ -259,3 +259,22 @@ def task_interval(times: np.ndarray, cube_positions: Sequence[np.ndarray], dock_
         return None
     k = np.flatnonzero(out_all)
     return float(times[inside[k[0]]]), float(times[inside[k[-1]]])
+
+
+def between_bangs(interval: Tuple[float, float], bangs: Sequence[float]) -> Tuple[Tuple[float, float], List[str]]:
+    """
+    Remove the bang ritual from a task interval: bangs are made right after
+    leaving the dock and right before returning (both grippers held up to the
+    head camera's microphone, where the cubes leave its view). A bang in the
+    first half of the interval moves the start to the last such bang, one in
+    the second half the end to the first such bang. Returns the interval and,
+    per side, 'bang' or 'dock' (no bang there: the dock boundary is kept).
+    """
+    start, end = interval
+    middle = 0.5 * (start + end)
+    inside = [b for b in bangs if start <= b <= end]
+    early = [b for b in inside if b < middle]
+    late = [b for b in inside if b >= middle]
+    new_start = max(early) if early else start
+    new_end = min(late) if late else end
+    return (new_start, new_end), ['bang' if early else 'dock', 'bang' if late else 'dock']

@@ -3,13 +3,18 @@ Remove the docking from dock-to-dock episodes (00b_segment_episodes.py,
 boundary 'dock'): per episode, the task runs from the first head frame where
 every cube is farther than dock_exit_distance from the nearest dock tag, to
 the last such frame (umi.tag_tracking.episodes.task_interval). Picking the
-grippers up from the dock and putting them back are outside it.
+grippers up from the dock and putting them back are outside it. Bangs made
+after leaving / before returning to the dock (held up to the head camera,
+cubes out of its view) are removed too: the task runs between them
+(umi.tag_tracking.episodes.between_bangs); without a bang on a side, that
+side stays at the dock boundary.
 
 Cube positions: tracked world poses (tag_tracking.pkl, 03/03b), a cube not
 tracked in a frame keeps its last known state. Dock tag positions: the
 environment tag map (tag_tracking/bodies.json).
 Adds 'task_start' / 'task_end' (head video seconds, or null if the cubes never
-left the dock area) to every episode of tag_tracking/episodes.json;
+left the dock area) and 'task_boundary' ([start, end]: 'dock' or 'bang') to
+every episode of tag_tracking/episodes.json;
 06_export_dataset_plan.py exports that interval.
 
 python scripts_tag_tracking/03t_trim_docking.py -i data_workspace/session -c umi_calib/tag_tracking.yaml
@@ -30,7 +35,7 @@ import click
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos
-from umi.tag_tracking.episodes import task_interval
+from umi.tag_tracking.episodes import task_interval, between_bangs
 
 
 def mmss(t):
@@ -41,7 +46,9 @@ def mmss(t):
 @click.command()
 @click.option('-i', '--input', required=True, help='Session directory')
 @click.option('-c', '--config', required=True, help='Tag tracking config yaml')
-def main(input, config):
+@click.option('--bang_ritual/--no_bang_ritual', default=True,
+    help='Also remove the bangs after leaving / before returning to the dock (the task runs between them)')
+def main(input, config, bang_ritual):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     assert 'episodes' in config, "tag tracking config needs an episodes section"
@@ -69,13 +76,18 @@ def main(input, config):
         durations = list()
         for k, e in enumerate(video['episodes']):
             interval = task_interval(times, positions, dock_positions, e['start'], e['end'], exit_distance)
+            sources = ['dock', 'dock']
+            if interval is not None and bang_ritual:
+                interval, sources = between_bangs(interval, video['bangs'])
             e['task_start'], e['task_end'] = (None, None) if interval is None else interval
+            e['task_boundary'] = None if interval is None else sources
             if interval is None:
                 print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: cubes never left the dock area, no task")
                 continue
             durations.append(interval[1] - interval[0])
             print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: task {mmss(interval[0])}-{mmss(interval[1])} "
-                f"({interval[1] - interval[0]:.1f}s; docking {interval[0] - e['start']:.1f}s + {e['end'] - interval[1]:.1f}s removed)")
+                f"({interval[1] - interval[0]:.1f}s; removed {interval[0] - e['start']:.1f}s + {e['end'] - interval[1]:.1f}s; "
+                f"start at {sources[0]}, end at {sources[1]})")
         print(f"{head['name']}: {len(durations)} of {len(video['episodes'])} episodes with a task, "
             + (f"{min(durations):.1f}-{max(durations):.1f}s, total {sum(durations):.0f}s" if durations else 'none'))
 

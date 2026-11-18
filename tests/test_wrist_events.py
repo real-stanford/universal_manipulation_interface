@@ -229,6 +229,11 @@ def test_dock_to_dock():
     assert abs(interval[0] - 8.1) < 0.051 and abs(interval[1] - 27.0) < 0.051, interval
     # cubes never leave the dock
     assert task_interval(times, [path(50.0, 51.0)] * 2, dock, 5.0, 30.0, 0.45) is None
+    # bang ritual: the task runs between the bangs; a side without a bang keeps the dock boundary
+    from umi.tag_tracking.episodes import between_bangs
+    assert between_bangs((8.0, 27.0), [2.0, 9.5, 10.0, 25.0, 40.0]) == ((10.0, 25.0), ['bang', 'bang'])
+    assert between_bangs((8.0, 27.0), [25.0]) == ((8.0, 25.0), ['dock', 'bang'])
+    assert between_bangs((8.0, 27.0), []) == ((8.0, 27.0), ['dock', 'dock'])
 
 
 def test():
