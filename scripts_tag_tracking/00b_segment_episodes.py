@@ -126,7 +126,7 @@ def main(input, config):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     assert 'episodes' in config, "tag tracking config needs an episodes section"
-    params = {k: v for k, v in config['episodes'].items() if k not in ('dock_tags', 'max_gap_sec')}
+    params = {k: v for k, v in config['episodes'].items() if k not in ('dock_tags', 'max_gap_sec', 'dock_exit_distance')}
     inputs = take_inputs(config)
     videos = get_session_videos(session)
 

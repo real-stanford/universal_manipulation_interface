@@ -45,12 +45,15 @@ bodies:
     gripper_camera: C3501326029433
     robot_index: 0
 
-# continuous takes: docked -> bang -> task -> bang -> docked, detected before tracking by
-# scripts_tag_tracking/00b_segment_episodes.py (rules: umi/tag_tracking/wrist_events.py).
-# Values validated on 2026-11-16 task1 (29 of 29 episodes); check new takes with
-# scripts_tag_tracking/check_wrist_events.py
+# continuous takes: docked -> task -> docked. Episodes between dock periods
+# (scripts_tag_tracking/00b_segment_episodes.py, rules: umi/tag_tracking/wrist_events.py),
+# docking removed after tracking (03t_trim_docking.py), wrist clocks synchronized from
+# motion (03s_sync_wrists.py). Bangs are optional (audio clock diagnostic only).
+# Check new takes with scripts_tag_tracking/check_wrist_events.py
 episodes:
   dock_tags: [46, 47]
+  boundary: dock          # 'dock' (between dock periods) or 'bang' (first to last bang)
+  dock_exit_distance: 0.45  # m, task = both cubes farther than this from the dock tags
   # idle: both wrist IMUs still and the head sees both cubes at the dock tags
   still_sec: 1.0          # s, stillness window
   gyro_still: 0.04        # rad/s, gyro RMS below this = still

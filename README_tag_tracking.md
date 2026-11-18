@@ -1,8 +1,9 @@
 # Tag tracking pipeline (GTSAM)
 
 Gripper poses from a head-mounted GoPro tracking ArUco cubes on the grippers,
-instead of wrist camera SLAM. Continuous takes are split into episodes
-(dock -> bang -> task -> bang -> dock). Output: `dataset_plan.pkl` (same format as
+instead of wrist camera SLAM. Continuous takes are split into episodes between
+dock periods; the docking is removed and the wrist camera clocks are
+synchronized to the head camera from motion. Output: `dataset_plan.pkl` (same format as
 the SLAM pipeline) and one MCAP file per episode.
 
 ## Hardware
@@ -67,8 +68,7 @@ python scripts/gen_tag_sticker_pdfs.py -o print/env_tags --ids 14-17,20-23,26-29
 - Gripper calibration: per gripper, open and close the fingers fully a few times.
 - Head mapping: walk the head camera slowly past every environment tag.
 - Take: start all cameras, then repeat per episode: grippers on the dock, still for 1 s
-  with the head camera looking at the dock tags; bang the two grippers together; do the
-  task; bang again; return to the dock.
+  with the head camera looking at the dock tags; do the task; return to the dock.
 
 ## Run
 
@@ -119,7 +119,7 @@ python scripts_tag_tracking/07_export_mcap.py -i <session> -j 4
 | `--start_from <step>` / `--stop_after <step>` | run a range of steps |
 
 Steps: `sort_videos imu wrist_tags gripper_range audio_sync head_tags segment_episodes use_setup
-calibrate_bodies track_bodies fuse_head_imu gripper_tcp fuse_grippers render export_plan`.
+calibrate_bodies track_bodies fuse_head_imu trim_docking gripper_tcp sync_wrists fuse_grippers render export_plan`.
 Logs: `<session>/logs/`.
 
 After a TCP change, without re-tracking:
@@ -147,7 +147,8 @@ python scripts_slam_pipeline/07_generate_replay_buffer.py --no_mirror -o <datase
 
 | Path | |
 |---|---|
-| `<session>/tag_tracking/episodes.json` | episodes per head video (head video seconds) |
+| `<session>/tag_tracking/episodes.json` | episodes per head video (head video seconds), task interval without docking |
+| `<session>/tag_tracking/wrist_sync.json` | wrist clock corrections and sync accuracy |
 | `<session>/demos/demo_<head>/tag_tracking.pkl` | head, cube and fused gripper poses |
 | `<session>/dataset_plan.pkl` | episodes in the UMI dataset plan format |
 | `<session>/dataset_mcap/episode_*.mcap` | one file per episode |
@@ -168,5 +169,5 @@ Metadata `recording`: episode length, image size, fps, world frame tag, TCP in t
 
 ## Limitations
 
-- An episode needs a detected bang at its start and end; soft bangs are missed and the episode is rejected.
-- Rolling shutter line delay is fixed to 0.
+- Episodes with a head tracking gap longer than `max_gap_sec` (0.25 s) inside are not exported to `dataset_plan.pkl`.
+- A task ends when the first gripper returns to the dock.

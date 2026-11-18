@@ -22,7 +22,8 @@ partly outside it (a wrist video stopped during them) are dropped. Following 06:
 - a step is valid if all grippers' poses are valid; valid segments
   shorter than min_episode_length are dropped; one episode per segment.
 With an 'episodes' section in the config (continuous takes), episodes come
-from 00b_segment_episodes.py (tag_tracking/episodes.json) instead:
+from 00b_segment_episodes.py (tag_tracking/episodes.json) instead, their task
+interval (task_start / task_end, 03t_trim_docking.py: docking removed) if present:
 - poses are interpolated across tracking gaps up to episodes.max_gap_sec;
 - invalid steps at an episode's start / end (the bang motions) are trimmed,
   at most --max_trim_sec per side; the rest must be fully valid, else the
@@ -271,6 +272,13 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 assert head['name'] in episodes, f"{head['name']} not in episodes.json, rerun 00b_segment_episodes.py"
                 segments = list()
                 for k, e in enumerate(episodes[head['name']]['episodes']):
+                    if 'task_start' in e:
+                        # dock-to-dock episode: the task without the docking (03t_trim_docking.py)
+                        if e['task_start'] is None:
+                            seen_episodes.add(k)
+                            print(f"  episode {k + 1} ({e['start']:.1f}-{e['end']:.1f}s): dropped, the cubes never left the dock")
+                            continue
+                        e = {**e, 'start': e['task_start'], 'end': e['task_end']}
                     e_start, e_end = head['start_timestamp'] + e['start'], head['start_timestamp'] + e['end']
                     if e_end < demo_timestamps[0] or e_start > demo_timestamps[-1]:
                         continue  # recorded by other wrist videos

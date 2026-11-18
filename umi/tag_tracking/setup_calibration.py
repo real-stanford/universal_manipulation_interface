@@ -77,11 +77,16 @@ def calibrate_bodies(camera: FisheyeCamera, body_frames: Dict[str, List[dict]], 
     frames (bodies in parallel), rolling shutter line delay, then tag poses
     again with the line delay.
     Line delay: with the sensor readout_time (s, GoPro metadata
-    SensorReadoutTime), |line_delay| = readout_time / image rows and only the
-    sign (readout direction) is chosen, by the smaller robust tracking error of
-    +, - and 0 (3 tracking passes); without it, bounded search over
-    |line_delay| <= frame period / image rows (~20 passes). Tracking passes are
-    split over the executor's workers (umi.tag_tracking.parallel).
+    SensorReadoutTime), line_delay = +readout_time / image rows, top row first:
+    confirmed on the 2026-11-16 head camera by timing (wrist sync, 03s: fitted
+    readout +9.3 +- 2.7 and +12.4 +- 3.6 ms against 11 ms), and the cubes'
+    reprojection error on their fastest frames (check_line_delay.py). It is not
+    chosen by the tracking error over all frames with bodies calibrated at
+    delay 0: the tag geometry (above all the environment map from a steady
+    mapping walk) then has absorbed the rolling shutter distortion and delay 0
+    always looks best. Without readout_time: bounded search over |line_delay|
+    <= frame period / image rows, the bodies recalibrated at every candidate.
+    Tracking passes are split over the executor's workers (umi.tag_tracking.parallel).
     body_frames: body name -> frames ({'time', 'corners', 'sequence'})
     """
     t0 = time.time()
@@ -96,7 +101,7 @@ def calibrate_bodies(camera: FisheyeCamera, body_frames: Dict[str, List[dict]], 
         log(f"  bodies calibrated with line delay {line_delay * 1e6:.3f} us ({time.time() - t:.0f}s)")
         return out
 
-    results = calibrate(0.0)
+    results = None
     image_rows = camera.image_size[1]
 
     def tracking_errors(line_delays):
@@ -112,16 +117,20 @@ def calibrate_bodies(camera: FisheyeCamera, body_frames: Dict[str, List[dict]], 
         return errors
 
     if readout_time is not None:
-        magnitude = readout_time / image_rows
-        candidates = [magnitude, -magnitude, 0.0]
-        errors = tracking_errors(candidates)
-        line_delay = float(candidates[int(np.argmin(errors))])
-        log(f"  readout {readout_time * 1e3:.1f} ms -> line delay {line_delay * 1e6:.3f} us")
+        line_delay = readout_time / image_rows
+        log(f"  readout {readout_time * 1e3:.1f} ms, top row first -> line delay {line_delay * 1e6:.3f} us")
     else:
+        results = calibrate(0.0)
         diffs = [b['time'] - a['time'] for a, b in zip(all_frames[:-1], all_frames[1:]) if a['sequence'] == b['sequence']]
         max_line_delay = float(np.median(diffs)) / image_rows
-        opt = scipy.optimize.minimize_scalar(lambda r: tracking_errors([r * max_line_delay])[0],
-            bounds=(-1, 1), method='bounded')
+
+        def error_at(r):
+            # bodies calibrated at this line delay, then tracked with it
+            nonlocal results
+            results = calibrate(r * max_line_delay)
+            return tracking_errors([r * max_line_delay])[0]
+
+        opt = scipy.optimize.minimize_scalar(error_at, bounds=(-1, 1), method='bounded', options={'maxiter': 8})
         line_delay = float(opt.x * max_line_delay)
         log(f"  line delay {line_delay * 1e6:.3f} us (readout {abs(line_delay) * image_rows * 1e3:.2f} ms)")
     return noise_model, line_delay, calibrate(line_delay)

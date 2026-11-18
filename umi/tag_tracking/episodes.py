@@ -8,14 +8,14 @@ segment_take: one head camera take -> idle periods, bangs, episodes.
 frame_labels: per frame label for rendering.
 All times are seconds on the head video's clock (its frame times in tag_corners.pkl).
 """
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 import pickle
 import numpy as np
 from umi.common.audio_sync_util import read_audio_mono
 from umi.tag_tracking.imu import load_imu
 from umi.tag_tracking.wrist_events import (DEFAULTS, gyro_rms, still_mask, accel_highpass, accel_peaks, robust_line,
     joint_spikes, docked_near, merge_bangs, audio_onset_ratio, audio_clicks, estimate_audio_lag, max_near,
-    docked_view, idle_periods, episodes_from_events, bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms, robust_drift_line)
+    docked_view, idle_periods, episodes_from_events, episodes_from_idle, bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms, robust_drift_line)
 
 GRID_DT = 0.01
 # joint spikes kept for diagnostics down to this strength (m/s^2)
@@ -130,7 +130,13 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
         params['audio_ratio']) for t in bangs]
 
     idle = idle_periods(grid, still_on_grid[0] & still_on_grid[1], frame_times, frame_docked, params['min_dock_frames'])
-    stretches = episodes_from_events(idle, bangs, take_end, params['idle_margin'], params['min_episode_sec'])
+    if params['boundary'] == 'dock':
+        stretches = episodes_from_idle(idle, take_end, params['min_episode_sec'])
+        for e in stretches:
+            e['n_bangs'] = int(np.sum((bangs >= e['active_start']) & (bangs <= e['active_end'])))
+    else:
+        assert params['boundary'] == 'bang', f"unknown episode boundary {params['boundary']}"
+        stretches = episodes_from_events(idle, bangs, take_end, params['idle_margin'], params['min_episode_sec'])
     episodes = [{k: e[k] for k in ['start', 'end', 'active_start', 'active_end', 'n_bangs']}
         for e in stretches if e['status'] == 'ok']
 
@@ -221,3 +227,35 @@ def frame_labels(times: np.ndarray, video_result: dict, bang_window: float = 0.1
     for t in video_result['bangs']:
         labels[np.abs(times - t) <= bang_window] = 'BANG'
     return labels.tolist()
+
+
+def task_interval(times: np.ndarray, cube_positions: Sequence[np.ndarray], dock_positions: np.ndarray,
+        start: float, end: float, exit_distance: float) -> Optional[Tuple[float, float]]:
+    """
+    The task part of a dock-to-dock episode, without the docking: from the
+    first head frame where every cube is farther than exit_distance (m) from
+    the nearest dock tag, to the last such frame. A cube not tracked in a
+    frame keeps its last known state (at the start of the episode: docked).
+    cube_positions: per cube (N,3) world positions per head frame, NaN where
+    not tracked; dock_positions: (M,3) world positions of the dock tags.
+    None if the cubes never all leave the dock area.
+    """
+    inside = np.flatnonzero((times >= start) & (times <= end))
+    if len(inside) == 0:
+        return None
+    out_all = np.ones(len(inside), dtype=bool)
+    for positions in cube_positions:
+        p = positions[inside]
+        distance = np.min(np.linalg.norm(p[:, None, :] - dock_positions[None, :, :], axis=2), axis=1)
+        known = ~np.isnan(distance)
+        state = np.zeros(len(inside), dtype=bool)   # out of the dock area
+        last = False
+        for k in range(len(inside)):
+            if known[k]:
+                last = distance[k] > exit_distance
+            state[k] = last
+        out_all &= state
+    if not out_all.any():
+        return None
+    k = np.flatnonzero(out_all)
+    return float(times[inside[k[0]]]), float(times[inside[k[-1]]])

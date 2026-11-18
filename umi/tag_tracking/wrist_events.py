@@ -76,6 +76,8 @@ DEFAULTS = {
     'dock_distance': 0.35,
     'min_dock_frames': 15,
     'sync_search': 0.1,
+    # episode boundaries: 'dock' (between dock periods, docking trimmed after tracking) or 'bang'
+    'boundary': 'dock',
     'sync_min_correlation': 0.5,
 }
 
@@ -444,6 +446,29 @@ def idle_periods(times: np.ndarray, still_both: np.ndarray, frame_times: np.ndar
         n_docked = int(np.sum(frame_docked[in_period]))
         out.append({'start': start, 'end': end, 'n_docked_frames': n_docked,
             'idle': n_docked >= min_dock_frames})
+    return out
+
+
+def episodes_from_idle(idle: List[dict], take_end: float, min_episode_sec: float) -> List[dict]:
+    """
+    Dock to dock: every stretch between consecutive confirmed idle periods
+    (and before the first / after the last) is an episode, no bangs needed;
+    shorter than min_episode_sec: rejected (too_short). The docking motions
+    at both ends are removed after tracking (03t_trim_docking.py).
+    """
+    confirmed = [x for x in idle if x['idle']]
+    bounds = [-np.inf] + [x for p in confirmed for x in (p['start'], p['end'])] + [take_end]
+    out = list()
+    for start, end in zip(bounds[0::2], bounds[1::2]):
+        start = float(max(start, 0.0))
+        if end <= start:
+            continue  # the take starts or ends docked
+        item = {'active_start': start, 'active_end': float(end), 'n_bangs': 0}
+        if end - start >= min_episode_sec:
+            item.update({'start': start, 'end': float(end), 'status': 'ok'})
+        else:
+            item['status'] = 'too_short'
+        out.append(item)
     return out
 
 

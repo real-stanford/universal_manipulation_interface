@@ -10,7 +10,7 @@ os.chdir(ROOT_DIR)
 import numpy as np
 from umi.tag_tracking.wrist_events import (DEFAULTS, runs, still_mask, accel_highpass, accel_peaks,
     joint_spikes, merge_bangs, audio_onset_ratio, max_near, docked_view, idle_periods, episodes_from_events,
-    bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms)
+    bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms, episodes_from_idle)
 
 RATE = 200.0
 
@@ -204,6 +204,33 @@ def test_wrist_clock_sync():
     assert click_offset(head, 0.0, wrist, 0.0, rate, duration - 0.01, 0.1) is None
 
 
+def test_dock_to_dock():
+    """
+    Episodes between dock periods without bangs; the task interval removes the docking.
+    """
+    from umi.tag_tracking.episodes import task_interval
+    idle = [{'start': 0.0, 'end': 5.0, 'idle': True}, {'start': 30.0, 'end': 35.0, 'idle': True},
+        {'start': 36.0, 'end': 37.0, 'idle': False}, {'start': 60.0, 'end': 61.0, 'idle': True}]
+    out = episodes_from_idle(idle, 62.0, 3.0)
+    # the take starts docked (no stretch before the first dock period); 61-62 s too short
+    assert [x['status'] for x in out] == ['ok', 'ok', 'too_short'], out
+    assert (out[0]['start'], out[0]['end']) == (5.0, 30.0) and (out[1]['start'], out[1]['end']) == (35.0, 60.0)
+
+    times = np.arange(5.0, 30.0, 0.1)
+    dock = np.array([[0.0, 0.0, 0.0], [0.15, 0.0, 0.0]])
+    # cube A leaves at 7 s, cube B at 8 s (not tracked 9-12 s), both back by 27 / 28 s
+    def path(leave, back):
+        p = np.zeros((len(times), 3))
+        p[:, 0] = np.where((times > leave) & (times < back), 0.8, 0.1)
+        return p
+    a, b = path(7.0, 27.0), path(8.0, 28.0)
+    b[(times > 9.0) & (times < 12.0)] = np.nan
+    interval = task_interval(times, [a, b], dock, 5.0, 30.0, 0.45)
+    assert abs(interval[0] - 8.1) < 0.051 and abs(interval[1] - 27.0) < 0.051, interval
+    # cubes never leave the dock
+    assert task_interval(times, [path(50.0, 51.0)] * 2, dock, 5.0, 30.0, 0.45) is None
+
+
 def test():
     test_runs()
     test_still_and_bangs()
@@ -212,6 +239,7 @@ def test():
     test_episodes()
     test_frame_labels()
     test_wrist_clock_sync()
+    test_dock_to_dock()
     print('all passed')
 
 

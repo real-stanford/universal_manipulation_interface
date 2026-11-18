@@ -20,6 +20,7 @@ use_setup:         scripts_tag_tracking/00c_use_setup.py                -> tag_t
 calibrate_bodies:  scripts_tag_tracking/02_calibrate_bodies.py          -> tag_tracking/bodies.json (without setup_calibration)
 track_bodies:      scripts_tag_tracking/03_track_bodies.py              -> head demos/*/tag_tracking.pkl (episodes +- 0.5 s)
 fuse_head_imu:     scripts_tag_tracking/03b_fuse_head_imu.py            -> tag_tracking.pkl refined per episode (if head_imu configured)
+trim_docking:      scripts_tag_tracking/03t_trim_docking.py             -> tag_tracking/episodes.json task_start / task_end, docking removed (if episodes configured)
 sync_wrists:       scripts_tag_tracking/03s_sync_wrists.py              -> tag_tracking/wrist_sync.json wrist clock corrections (if episodes and gripper_imu configured)
 fuse_grippers:     scripts_tag_tracking/03c_fuse_gripper_imu.py         -> tag_tracking.pkl gripper poses: wrist IMU + wrist env tags + head (if gripper_imu configured)
 gripper_tcp:       scripts_tag_tracking/05_calibrate_gripper_tcp.py     -> tag_tracking/gripper_tcp.json (without setup_calibration)
@@ -52,7 +53,7 @@ import subprocess
 import yaml
 
 STEP_NAMES = ['sort_videos', 'imu', 'wrist_tags', 'gripper_range', 'audio_sync', 'head_tags',
-    'segment_episodes', 'use_setup', 'calibrate_bodies', 'track_bodies', 'fuse_head_imu', 'gripper_tcp', 'sync_wrists',
+    'segment_episodes', 'use_setup', 'calibrate_bodies', 'track_bodies', 'fuse_head_imu', 'trim_docking', 'gripper_tcp', 'sync_wrists',
     'fuse_grippers',
     'render', 'export_plan']
 
@@ -136,6 +137,7 @@ def main(session_dir, config, camera_intrinsics, start_from, stop_after, no_rend
             'calibrate_bodies': (tag_dir.joinpath('02_calibrate_bodies.py'), tag_args),
             'track_bodies': (tag_dir.joinpath('03_track_bodies.py'), tag_args + workers),
             'fuse_head_imu': (tag_dir.joinpath('03b_fuse_head_imu.py'), tag_args + workers),
+            'trim_docking': (tag_dir.joinpath('03t_trim_docking.py'), tag_args),
             'sync_wrists': (tag_dir.joinpath('03s_sync_wrists.py'), tag_args),
             'fuse_grippers': (tag_dir.joinpath('03c_fuse_gripper_imu.py'), tag_args + workers),
             'gripper_tcp': (tag_dir.joinpath('05_calibrate_gripper_tcp.py'), tag_args),
@@ -148,6 +150,7 @@ def main(session_dir, config, camera_intrinsics, start_from, stop_after, no_rend
             'segment_episodes': None if 'episodes' in config_yaml else "no episodes in config (one take = one demo)",
             'render': "--no_render" if no_render else None,
             'fuse_grippers': None if 'gripper_imu' in config_yaml else "no gripper_imu in config",
+            'trim_docking': None if 'episodes' in config_yaml else "no episodes in config",
             'sync_wrists': None if ('gripper_imu' in config_yaml and 'episodes' in config_yaml)
                 else "needs episodes and gripper_imu in config",
             # setup calibration (calibrate_setup.py) replaces per-session calibration
