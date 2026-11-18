@@ -28,5 +28,22 @@ def test():
     print('all passed')
 
 
+def test_split_window():
+    from umi.tag_tracking.windows import split_window
+    times = np.arange(0.0, 200.0, 1 / 60)
+    chunks = split_window(times, 600, 6600, 12.0, 1.0)      # 100 s window
+    assert len(chunks) == 9
+    keep = [i for lo, hi, a, b in chunks for i in range(a, b)]
+    assert keep == list(range(600, 6600))                    # kept parts tile the window exactly
+    for lo, hi, a, b in chunks:
+        assert lo <= a and b <= hi and 600 <= lo and hi <= 6600
+        if a > 600:
+            assert times[a] - times[lo] >= 1.0 - 1e-9        # context before
+        if b < 6600:
+            assert times[hi - 1] - times[b - 1] >= 1.0 - 1e-9  # context after
+    assert split_window(times, 0, 600, 12.0, 1.0) == [(0, 600, 0, 600)]
+
+
 if __name__ == '__main__':
+    test_split_window()
     test()

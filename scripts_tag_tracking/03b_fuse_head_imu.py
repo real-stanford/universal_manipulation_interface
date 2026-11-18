@@ -29,7 +29,7 @@ from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.noise_model import TagNoiseModel
 from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise
 from umi.tag_tracking.parallel import make_executor, submit_fuse
-from umi.tag_tracking.windows import window_frames, scatter
+from umi.tag_tracking.windows import window_frames, scatter, split_window
 from umi.tag_tracking.uncertainty import compose_covariance, pose_std
 
 
@@ -38,7 +38,9 @@ from umi.tag_tracking.uncertainty import compose_covariance, pose_std
 @click.option('-i', '--input', required=True, help='Session directory')
 @click.option('-c', '--config', required=True, help='Tag tracking config yaml')
 @click.option('-j', '--num_workers', type=int, default=None, help='Worker processes, default all cores')
-def main(input, config, num_workers):
+@click.option('--chunk_sec', type=float, default=12.0, help='Windows longer than this are solved in chunks in parallel')
+@click.option('--context_sec', type=float, default=1.0, help='Extra frames solved on each side of a chunk, not kept')
+def main(input, config, num_workers, chunk_sec, context_sec):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     assert 'head_imu' in config, "tag tracking config needs head_imu"
@@ -63,30 +65,40 @@ def main(input, config, num_workers):
         tags_only = track.get('head_tags_only', track['head'])
         windows = track.get('windows', [(0, len(frames))])
 
-        # one smoothing problem per window, windows in parallel
-        futures = [submit_fuse(executor, camera, frames[a:b], T_world_tags, config['tag_sizes'],
-            noise_model, imu, cam_imu['T_imu_cam'], cam_imu['time_offset'], imu_noise,
-            tags_only['T_world_cam'][a:b]) for a, b in windows]
-        parts = list()
-        for (a, b), future in zip(windows, futures):
-            try:
-                parts.append(future.result())
-            except Exception as e:
-                # e.g. too few tags in the window: no fused head pose there
-                print(f"  window {frames[a]['time']:.1f}-{frames[b - 1]['time']:.1f}s: smoothing failed ({e}), left invalid")
-                parts.append({'T_world_cam': np.full((b - a, 4, 4), np.nan), 'covariance': np.full((b - a, 6, 6), np.nan),
-                    'position_std': np.full(b - a, np.nan), 'rotation_std': np.full(b - a, np.nan),
-                    'n_tags': np.zeros(b - a, dtype=int), 'gyro_bias': np.full((b - a, 3), np.nan),
-                    'accel_bias': np.full((b - a, 3), np.nan), 'variance_factor': np.nan, 'gravity_alignment_deg': np.nan})
-        _, idx = window_frames(frames, windows)
+        # one smoothing problem per chunk of a window (long windows split, umi.tag_tracking.windows.split_window),
+        # all chunks in parallel, longest first; each chunk keeps its middle part
+        times = np.array([f['time'] for f in frames])
+        chunks = [c for a, b in windows for c in split_window(times, a, b, chunk_sec, context_sec)]
+        order = sorted(range(len(chunks)), key=lambda k: chunks[k][0] - chunks[k][1])
+        futures = dict()
+        for k in order:
+            lo, hi, _, _ = chunks[k]
+            futures[k] = submit_fuse(executor, camera, frames[lo:hi], T_world_tags, config['tag_sizes'],
+                noise_model, imu, cam_imu['T_imu_cam'], cam_imu['time_offset'], imu_noise, tags_only['T_world_cam'][lo:hi])
         per_frame = ['T_world_cam', 'covariance', 'position_std', 'rotation_std', 'n_tags', 'gyro_bias', 'accel_bias']
+        parts = list()
+        for k, (lo, hi, keep_lo, keep_hi) in enumerate(chunks):
+            n = keep_hi - keep_lo
+            try:
+                result = futures[k].result()
+                part = {key: result[key][keep_lo - lo:keep_hi - lo] for key in per_frame}
+                part.update({key: result[key] for key in ('variance_factor', 'gravity_alignment_deg')})
+            except Exception as e:
+                # e.g. too few tags in the chunk: no fused head pose there
+                print(f"  chunk {frames[lo]['time']:.1f}-{frames[hi - 1]['time']:.1f}s: smoothing failed ({e}), left invalid")
+                part = {'T_world_cam': np.full((n, 4, 4), np.nan), 'covariance': np.full((n, 6, 6), np.nan),
+                    'position_std': np.full(n, np.nan), 'rotation_std': np.full(n, np.nan),
+                    'n_tags': np.zeros(n, dtype=int), 'gyro_bias': np.full((n, 3), np.nan),
+                    'accel_bias': np.full((n, 3), np.nan), 'variance_factor': np.nan, 'gravity_alignment_deg': np.nan}
+            parts.append(part)
+        _, idx = window_frames(frames, windows)
         fused = scatter(len(frames), idx, {k: np.concatenate([x[k] for x in parts]) for k in per_frame})
         fused['window_stats'] = [{'variance_factor': x['variance_factor'],
             'gravity_alignment_deg': x['gravity_alignment_deg']} for x in parts]
         fused['is_valid'] = is_accurate(fused['position_std'], fused['rotation_std'])
         variance_factors = [x['variance_factor'] for x in parts]
         gravity = [x['gravity_alignment_deg'] for x in parts]
-        print(f"{video_dir.name}: {len(windows)} windows, head valid {tags_only['is_valid'][idx].mean() * 100:.0f}% tags only -> "
+        print(f"{video_dir.name}: {len(windows)} windows in {len(chunks)} chunks, head valid {tags_only['is_valid'][idx].mean() * 100:.0f}% tags only -> "
             f"{fused['is_valid'][idx].mean() * 100:.0f}% fused (median std {np.nanmedian(fused['position_std']) * 1000:.1f} mm, "
             f"{np.degrees(np.nanmedian(fused['rotation_std'])):.2f} deg), tag variance factor median {np.nanmedian(variance_factors):.2f}, "
             f"world-gravity alignment median {np.nanmedian(gravity):.2f} deg")

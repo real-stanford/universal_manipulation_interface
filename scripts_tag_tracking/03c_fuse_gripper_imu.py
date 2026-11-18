@@ -37,6 +37,7 @@ from umi.tag_tracking.noise_model import TagNoiseModel
 from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.parallel import make_executor, submit_fuse
+from umi.tag_tracking.windows import split_window
 from umi.tag_tracking.gripper_fusion import wrist_measurements, init_poses
 from umi.tag_tracking.wrist_sync import (wrist_corrections, correction_seconds, head_readout, cube_image_rows,
     observation_times)
@@ -48,7 +49,9 @@ from umi.tag_tracking.wrist_sync import (wrist_corrections, correction_seconds, 
 @click.option('-c', '--config', required=True, help='Tag tracking config yaml with gripper_imu')
 @click.option('--max_head_gap', type=float, default=0.05, help='Head frames around a wrist frame at most this apart (s)')
 @click.option('-j', '--num_workers', type=int, default=None, help='Worker processes, default all cores')
-def main(input, config, max_head_gap, num_workers):
+@click.option('--chunk_sec', type=float, default=12.0, help='Windows longer than this are solved in chunks in parallel')
+@click.option('--context_sec', type=float, default=1.0, help='Extra frames solved on each side of a chunk, not kept')
+def main(input, config, max_head_gap, num_workers, chunk_sec, context_sec):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     assert 'gripper_imu' in config, "tag tracking config needs gripper_imu"
@@ -79,6 +82,9 @@ def main(input, config, max_head_gap, num_workers):
         # when the head observed each cube pose (rolling shutter, tracking line delay)
         head_camera = config['cameras'][config['head_camera']]
         readout = head_readout(head)
+        # all chunks of all grippers submitted first (long windows split, longest first), collected after
+        jobs = {name: list() for name in names}
+        submissions = list()
         for name in names:
             serial = config['bodies'][name]['gripper_camera']
             assert serial in config['gripper_imu'], f"no gripper_imu for camera {serial} ({name})"
@@ -90,7 +96,6 @@ def main(input, config, max_head_gap, num_workers):
             cube_times = observation_times(head_times, cube_image_rows(body['T_cam_body'], head_camera,
                 head_camera.image_size[1]), readout, calibration['line_delay'], head_camera.image_size[1])
 
-            jobs = list()
             for wrist in overlapping(videos, head, serial):
                 detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
                 wrist_times = np.array([d['time'] for d in detections])
@@ -102,41 +107,51 @@ def main(input, config, max_head_gap, num_workers):
                     print(f"  {name} {wrist['name']}: no wrist sync correction, audio sync only")
                 imu = load_imu(str(wrist['dir'].joinpath('imu_data.json')))
                 for a, b in windows:
-                    inside = np.flatnonzero((on_head >= head_times[a]) & (on_head <= head_times[b - 1]))
-                    if len(inside) < 2:
-                        continue
-                    frames = [{'time': float(wrist_times[i]), 'corners': {k: v['corners']
-                        for k, v in detections[i]['tag_dict'].items() if k in T_env_tags}} for i in inside]
-                    measurements = wrist_measurements(on_head[inside], cube_times, body['T_world_body'],
-                        body['world_covariance'], body['is_valid_world'], T_cube_wrist, max_head_gap)
-                    init = init_poses(len(inside), measurements)
-                    if init is None:
-                        print(f"  {name} {wrist['name']} window {head_times[a]:.1f}-{head_times[b - 1]:.1f}s: "
-                            f"no head measurement, skipped")
-                        continue
-                    future = submit_fuse(executor, camera, frames, T_env_tags, config['tag_sizes'], wrist_noise,
-                        imu, cam_imu['T_imu_cam'], cam_imu['time_offset'], imu_noise, init, measurements)
-                    jobs.append((on_head[inside], measurements, frames, future))
+                    for lo, hi, keep_lo, keep_hi in split_window(head_times, a, b, chunk_sec, context_sec):
+                        inside = np.flatnonzero((on_head >= head_times[lo]) & (on_head <= head_times[hi - 1]))
+                        if len(inside) < 2:
+                            continue
+                        # kept wrist frames: head time in [keep_lo, keep_hi) (to the window's end for the last chunk)
+                        t = on_head[inside]
+                        keep = (t >= head_times[keep_lo]) & ((t < head_times[keep_hi]) if keep_hi < b else (t <= head_times[b - 1]))
+                        if not keep.any():
+                            continue
+                        frames = [{'time': float(wrist_times[i]), 'corners': {k: v['corners']
+                            for k, v in detections[i]['tag_dict'].items() if k in T_env_tags}} for i in inside]
+                        measurements = wrist_measurements(t, cube_times, body['T_world_body'],
+                            body['world_covariance'], body['is_valid_world'], T_cube_wrist, max_head_gap)
+                        init = init_poses(len(inside), measurements)
+                        if init is None:
+                            print(f"  {name} {wrist['name']} chunk {head_times[lo]:.1f}-{head_times[hi - 1]:.1f}s: "
+                                f"no head measurement, skipped")
+                            continue
+                        submissions.append((len(inside), name, t, measurements, frames, keep, (camera, frames, T_env_tags,
+                            config['tag_sizes'], wrist_noise, imu, cam_imu['T_imu_cam'], cam_imu['time_offset'],
+                            imu_noise, init, measurements)))
+        for size, name, t, measurements, frames, keep, args in sorted(submissions, key=lambda x: -x[0]):
+            jobs[name].append((t, measurements, frames, keep, submit_fuse(executor, *args)))
 
+        for name in names:
+            serial = config['bodies'][name]['gripper_camera']
             parts = list()
             n_failed = 0
-            for times, measurements, frames, future in jobs:
+            for times, measurements, frames, keep, future in jobs[name]:
                 try:
                     fused = future.result()
                 except Exception as e:
                     n_failed += 1
-                    print(f"  {name} window {times[0]:.1f}-{times[-1]:.1f}s: smoothing failed ({e})")
+                    print(f"  {name} chunk {times[0]:.1f}-{times[-1]:.1f}s: smoothing failed ({e})")
                     continue
                 measured = np.zeros(len(times), dtype=bool)
                 measured[list(measurements)] = True
                 parts.append({
-                    'time': times,
-                    'T_world_wrist': fused['T_world_cam'],
-                    'covariance': fused['covariance'],
-                    'position_std': fused['position_std'],
-                    'rotation_std': fused['rotation_std'],
-                    'head_measured': measured,
-                    'n_wrist_tags': np.array([len(f['corners']) for f in frames])
+                    'time': times[keep],
+                    'T_world_wrist': fused['T_world_cam'][keep],
+                    'covariance': fused['covariance'][keep],
+                    'position_std': fused['position_std'][keep],
+                    'rotation_std': fused['rotation_std'][keep],
+                    'head_measured': measured[keep],
+                    'n_wrist_tags': np.array([len(f['corners']) for f in frames])[keep]
                 })
             result = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else None
             if result is None:
@@ -146,7 +161,7 @@ def main(input, config, max_head_gap, num_workers):
             result = {k: v[order] for k, v in result.items()}
             result['is_valid'] = is_accurate(result['position_std'], result['rotation_std'])
             track['grippers'][name] = result
-            print(f"{head['name']} {name} (camera {serial}): {len(parts)} windows ({n_failed} failed), "
+            print(f"{head['name']} {name} (camera {serial}): {len(parts)} chunks of {len(windows)} windows ({n_failed} failed), "
                 f"{len(result['time'])} wrist frames: head measured {result['head_measured'].mean() * 100:.0f}%, "
                 f"wrist sees >= 1 env tag {(result['n_wrist_tags'] >= 1).mean() * 100:.0f}% -> fused valid "
                 f"{result['is_valid'].mean() * 100:.0f}% (median std {np.nanmedian(result['position_std']) * 1000:.1f} mm, "

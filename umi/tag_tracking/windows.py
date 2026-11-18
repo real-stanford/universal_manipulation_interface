@@ -53,3 +53,26 @@ def scatter(n: int, idx: np.ndarray, values: Dict[str, np.ndarray]) -> Dict[str,
         full[idx] = v
         out[k] = full
     return out
+
+
+def split_window(times: np.ndarray, a: int, b: int, chunk_sec: float, context_sec: float) -> List[Tuple[int, int, int, int]]:
+    """
+    A long window [a, b) as chunks solved separately (in parallel): per chunk
+    (lo, hi, keep_lo, keep_hi) frame indices; the kept parts [keep_lo, keep_hi)
+    tile [a, b) without overlap, each extended by context_sec on both sides
+    (within the window) so every kept frame has motion context around it.
+    A window up to chunk_sec long is one chunk.
+    """
+    duration = times[b - 1] - times[a]
+    n = max(1, int(np.ceil(duration / chunk_sec)))
+    if n == 1:
+        return [(a, b, a, b)]
+    cuts = [a] + [int(np.searchsorted(times, times[a] + k * duration / n, side='left')) for k in range(1, n)] + [b]
+    out = list()
+    for keep_lo, keep_hi in zip(cuts[:-1], cuts[1:]):
+        if keep_hi <= keep_lo:
+            continue
+        lo = max(a, int(np.searchsorted(times, times[keep_lo] - context_sec, side='left')))
+        hi = min(b, int(np.searchsorted(times, times[keep_hi - 1] + context_sec, side='right')))
+        out.append((lo, hi, keep_lo, keep_hi))
+    return out

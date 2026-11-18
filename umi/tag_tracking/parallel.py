@@ -23,6 +23,8 @@ from umi.tag_tracking.noise_model import TagNoiseModel
 from umi.tag_tracking.rigid_body import track_rigid_body, calibrate_rigid_body
 
 CHUNKS_PER_WORKER = 4
+# IMU samples sent with a fusion window beyond its first / last frame (s)
+IMU_MARGIN_SEC = 1.0
 
 
 def make_executor(num_workers: Optional[int] = None) -> concurrent.futures.ProcessPoolExecutor:
@@ -118,5 +120,9 @@ def submit_fuse(executor, camera: FisheyeCamera, frames: List[dict], T_world_tag
     Visual-inertial smoothing (umi.tag_tracking.visual_inertial.fuse_camera_trajectory)
     of one window of frames in a worker process; returns the future.
     """
+    # only the IMU samples around the window's frames go to the worker (camera time = IMU time + offset)
+    t0, t1 = frames[0]['time'] - time_offset - IMU_MARGIN_SEC, frames[-1]['time'] - time_offset + IMU_MARGIN_SEC
+    lo, hi = np.searchsorted(imu['time'], [t0, t1])
+    imu = {k: v[lo:hi] for k, v in imu.items()}
     return executor.submit(_fuse_window, camera.intrinsics_json, frames, T_world_tags, tag_sizes,
         noise_model.to_dict(), imu, T_imu_cam, time_offset, imu_noise, T_world_cam_init, pose_measurements)
