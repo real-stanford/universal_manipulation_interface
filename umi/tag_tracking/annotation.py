@@ -168,7 +168,7 @@ def frame_times_for_review(task_start: float, task_end: float, events: Dict[str,
 
 
 # ---------------------------------------------------------------- visual check
-# Enums of the Odyssey spec v0.6 (1.4 / 1.7 / 2.7) the model answers in.
+# Enums of the Odyssey spec v0.6 (1.7 / 2.7 / 2.9) the model answers in.
 TASK_FAMILIES = ['grasp', 'place', 'stack', 'sort', 'insert', 'bin_pick', 'tool_use', 'pour', 'fold', 'wipe',
     'assemble', 'open_close', 'handover', 'restock', 'pack']
 OUTCOMES = ['success', 'failure', 'partial', 'aborted', 'unknown']
@@ -176,6 +176,9 @@ CONTRIBUTIONS = ['advancing', 'idle', 'wasteful']
 ISSUE_CATEGORIES = ['dropped_object', 'incomplete_task', 'idle_stretch', 'other']
 SEVERITIES = ['low', 'medium', 'high']
 CAMERAS = ['head', 'right_wrist', 'left_wrist']
+OBJECT_CLASSES = ['rigid', 'deformable', 'articulated', 'granular', 'liquid', 'tool']
+DIFFICULTIES = ['single_step', 'multi_step', 'long_horizon']
+FAILURE_KINDS = ['missed_grasp', 'drop', 'slip', 'collision', 'wrong_object', 'timeout', 'other']
 
 
 def measured_items(start: float, end: float, task_start: float, task_end: float,
@@ -214,18 +217,18 @@ def response_schema(span_ids: Sequence[str], event_ids: Sequence[str]) -> dict:
 
     return obj({
         'task': obj({
-            'task': string, 'skill': enum(TASK_FAMILIES), 'objects': {'type': 'array', 'items': string},
-            'success_predicate': string, 'outcome': enum(OUTCOMES), 'completed_at_s': number,
+            'task': string, 'skill': enum(TASK_FAMILIES), 'difficulty': enum(DIFFICULTIES),
+            'objects': {'type': 'array', 'items': string}, 'main_object': string, 'success_predicate': string, 'outcome': enum(OUTCOMES), 'completed_at_s': number,
             'instruction_variants': {'type': 'array', 'items': string}, 'confidence': number}),
         'spans': array({'span_id': enum(span_ids), 'verb': string, 'object': string, 'destination': string,
             'contribution': enum(CONTRIBUTIONS), 'progress': number, 'confidence': number}),
         'gripper_events': array({'event_id': enum(event_ids), 'label': string, 'object': string,
             'grasped_or_released': boolean, 'outcome': enum(['success', 'failure']), 'note': string}),
         'state_changes': array({'t_s': number, 'object': string, 'from': string, 'to': string, 'seen_in': enum(CAMERAS)}),
-        'recoveries': array({'failure_t_s': number, 'failure': string, 'recovered': boolean,
-            'recovered_at_s': number, 'correction': string}),
+        'recoveries': array({'failure_t_s': number, 'failure': string, 'failure_kind': enum(FAILURE_KINDS),
+            'recovered': boolean, 'recovered_at_s': number, 'correction': string}),
         'issues': array({'t_s': number, 'category': enum(ISSUE_CATEGORIES), 'severity': enum(SEVERITIES), 'evidence': string}),
-        'objects': array({'name': string, 'description': string}),
+        'objects': array({'name': string, 'description': string, 'object_class': enum(OBJECT_CLASSES)}),
         'scene_graph': array({'t_s': number, 'relations': {'type': 'array', 'items': string}}),
     })
 
@@ -299,7 +302,9 @@ def merge_annotation(answer: dict, start: float, task_start: float, task_end: fl
             'actions': sorted({e['verb'] for e in out_events if e['verb'] and e['verb'] != 'reset'}),
             'objects': task['objects'], 'outcome': task['outcome'], 'success_predicate': task['success_predicate'],
             'completed_at_s': completed, 'instruction_variants': task['instruction_variants'],
-            'confidence': task['confidence']}],
+            'confidence': task['confidence'],
+            # coverage dimensions (spec 2.9); None in answers written before they were asked
+            'difficulty': task.get('difficulty'), 'main_object': task.get('main_object')}],
         'events': out_events,
         'key_events': key_events,
         'state_changes': answer['state_changes'],
@@ -329,7 +334,8 @@ def label_inventory(answers: Sequence[dict]) -> dict:
     'objects' (objects and places: task objects, span object / destination,
     gripper event objects, state change objects, object names, with the
     descriptions seen), 'phrases' (span verbs, gripper event labels), 'tasks'
-    (task sentences with skill, success predicate and objects seen).
+    (task sentences with skill, difficulty, success predicate and objects
+    seen). Object classes and difficulties seen go along as context.
     """
     objects, phrases, tasks = dict(), dict(), dict()
 
@@ -345,20 +351,21 @@ def label_inventory(answers: Sequence[dict]) -> dict:
 
     for a in answers:
         task = a['task']
-        add(tasks, task['task'], skill=task['skill'], success_predicate=task['success_predicate'], objects=task['objects'])
+        add(tasks, task['task'], skill=task['skill'], difficulty=task.get('difficulty'),
+            success_predicate=task['success_predicate'], objects=task['objects'])
         for s in task['objects']:
-            add(objects, s, descriptions=[])
+            add(objects, s, descriptions=[], object_class=[])
         for s in a['spans']:
             add(phrases, s['verb'])
-            add(objects, s['object'], descriptions=[])
-            add(objects, s['destination'], descriptions=[])
+            add(objects, s['object'], descriptions=[], object_class=[])
+            add(objects, s['destination'], descriptions=[], object_class=[])
         for x in a['gripper_events']:
             add(phrases, x['label'])
-            add(objects, x['object'], descriptions=[])
+            add(objects, x['object'], descriptions=[], object_class=[])
         for x in a['state_changes']:
-            add(objects, x['object'], descriptions=[])
+            add(objects, x['object'], descriptions=[], object_class=[])
         for x in a['objects']:
-            add(objects, x['name'], descriptions=x['description'])
+            add(objects, x['name'], descriptions=x['description'], object_class=x.get('object_class'))
     return {'objects': objects, 'phrases': phrases, 'tasks': tasks}
 
 
@@ -377,9 +384,11 @@ def vocabulary_schema(inventory: dict) -> dict:
         return {'type': 'array', 'items': {'type': 'string', 'enum': list(inventory[category]) or ['none']}}
 
     return obj({
-        'objects': {'type': 'array', 'items': obj({'name': string, 'description': string, 'aliases': aliases('objects')})},
+        'objects': {'type': 'array', 'items': obj({'name': string, 'description': string,
+            'object_class': {'type': 'string', 'enum': OBJECT_CLASSES}, 'aliases': aliases('objects')})},
         'phrases': {'type': 'array', 'items': obj({'phrase': string, 'aliases': aliases('phrases')})},
         'tasks': {'type': 'array', 'items': obj({'task': string, 'skill': {'type': 'string', 'enum': TASK_FAMILIES},
+            'difficulty': {'type': 'string', 'enum': DIFFICULTIES},
             'success_predicate': string, 'instruction_variants': {'type': 'array', 'items': string},
             'aliases': aliases('tasks')})},
     })
@@ -410,8 +419,9 @@ def vocabulary_maps(vocabulary: dict, inventory: dict) -> Tuple[dict, List[str]]
 def apply_vocabulary(answer: dict, maps: dict) -> dict:
     """
     The model answer with every object, phrase and task replaced by its
-    canonical label; a task takes the group's skill, success predicate and
-    instruction variants, an object the group's description.
+    canonical label; a task takes the group's skill, difficulty, success
+    predicate and instruction variants, an object the group's description and
+    object class.
     """
     import copy
     a = copy.deepcopy(answer)
@@ -430,7 +440,11 @@ def apply_vocabulary(answer: dict, maps: dict) -> dict:
         g = maps['tasks'][t['task']]
         t.update({'task': g['task'], 'skill': g['skill'], 'success_predicate': g['success_predicate'],
             'instruction_variants': list(g['instruction_variants'])})
+        if 'difficulty' in g:
+            t['difficulty'] = g['difficulty']
     t['objects'] = unique(name(s) for s in t['objects'])
+    if t.get('main_object') is not None:
+        t['main_object'] = name(t['main_object'])
     for s in a['spans']:
         s.update({'verb': phrase(s['verb']), 'object': name(s['object']), 'destination': name(s['destination'])})
     for x in a['gripper_events']:
@@ -441,7 +455,8 @@ def apply_vocabulary(answer: dict, maps: dict) -> dict:
     for x in a['objects']:
         n = name(x['name'])
         if n not in objects:
-            objects[n] = {'name': n, 'description': maps['objects'][x['name']]['description']
-                if x['name'] in maps['objects'] else x['description']}
+            g = maps['objects'].get(x['name'])
+            objects[n] = {'name': n, 'description': g['description'] if g else x['description'],
+                'object_class': g.get('object_class') if g else x.get('object_class')}
     a['objects'] = list(objects.values())
     return a

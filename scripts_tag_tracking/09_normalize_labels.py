@@ -51,7 +51,9 @@ destination or goal ("small box" vs "large box", "place cup in bowl" vs "place c
 - Every label of the input goes into exactly one group (a label alone is a group of one).
 - If existing canonical labels are given, keep them as the canonical labels of their groups.
 - A task group's instruction_variants are two to five other natural ways to say that task; its \
-success_predicate is the visible end state; its skill the closest task family."""
+success_predicate is the visible end state; its skill the closest task family; its difficulty the one most \
+episodes gave unless it is clearly wrong.
+- An object group's object_class is the class most episodes gave, unless it is clearly wrong."""
 
 
 def load_annotations(sessions):
@@ -68,12 +70,13 @@ def request_text(inventory, existing):
         parts.append("Existing canonical labels (keep these names):\n" + json.dumps(
             {c: [{k: v for k, v in e.items() if k != 'aliases'} for e in existing.get(c, [])]
              for c in ('objects', 'phrases', 'tasks')}, indent=1))
-    parts.append("Objects and places (label: count, descriptions seen):\n" + '\n'.join(
-        f"- {s}: {x['count']}" + (f", {'; '.join(x['descriptions'])}" if x['descriptions'] else '')
+    parts.append("Objects and places (label: count, classes seen, descriptions seen):\n" + '\n'.join(
+        f"- {s}: {x['count']}" + (f", classes {x['object_class']}" if x['object_class'] else '')
+        + (f", {'; '.join(x['descriptions'])}" if x['descriptions'] else '')
         for s, x in inventory['objects'].items()))
     parts.append("Phrases (label: count):\n" + '\n'.join(f"- {s}: {x['count']}" for s, x in inventory['phrases'].items()))
-    parts.append("Tasks (sentence: count, skills, success predicates, objects seen):\n" + '\n'.join(
-        f"- {s}: {x['count']}, skills {x['skill']}, predicates {x['success_predicate']}, objects {x['objects']}"
+    parts.append("Tasks (sentence: count, skills, difficulties, success predicates, objects seen):\n" + '\n'.join(
+        f"- {s}: {x['count']}, skills {x['skill']}, difficulties {x['difficulty']}, predicates {x['success_predicate']}, objects {x['objects']}"
         for s, x in inventory['tasks'].items()))
     return '\n\n'.join(parts)
 

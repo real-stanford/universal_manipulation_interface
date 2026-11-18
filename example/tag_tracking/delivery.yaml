@@ -1,0 +1,14 @@
+# Delivery declarations (Odyssey spec 2.3 / 2.4 / 2.9), read by
+# scripts_tag_tracking/10_coverage_report.py and the delivery export.
+# Copy this file, fill in what is known; null means not known and is
+# exported as null.
+sessions:
+  # one entry per session directory name
+  task1:
+    collection_mode: null     # scripted (task given before recording) | freeform | adversarial | in_the_wild
+    scene_tags: []            # from: tabletop kitchen workbench warehouse retail industrial_line household
+                              #       hospitality laboratory outdoor other
+    environment_id: null      # same place and setup -> same id
+    operator_id: null
+    station_id: null
+    consent_reference: null   # consent record for the people visible in the media

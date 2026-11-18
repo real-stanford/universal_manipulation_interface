@@ -80,7 +80,13 @@ is carried, e.g. while approaching.
 - outcome is "success" only if the frames show the goal reached; completed_at_s is then the time it was \
 reached (use the label time of the first frame showing it).
 - progress is how far the whole task is done at the end of the span, from 0 (not started) to 1 (done); \
-confidence is from 0 to 1."""
+confidence is from 0 to 1.
+- main_object is the object the task is about (one of objects). object_class of each object: rigid, \
+deformable (cloth, bag, cable), articulated (lid on a hinge, drawer, box flaps), granular, liquid, or tool \
+(an object used to act on another, like a screwdriver used to drive a screw; a screwdriver only moved is rigid).
+- difficulty: single_step (one grasp and place), multi_step (a few dependent steps), long_horizon (many \
+steps or subgoals).
+- failure_kind of a recovery: missed_grasp, drop, slip, collision, wrong_object, timeout or other."""
 
 
 def read_frames(video_path, times):

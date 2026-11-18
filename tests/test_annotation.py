@@ -166,7 +166,8 @@ def test_vocabulary():
     assert b['spans'][0]['verb'] == 'grasp blue cup' and b['spans'][0]['object'] == 'blue cup'
     assert b['spans'][0]['destination'] == 'unknown'
     assert b['gripper_events'][0]['label'] == 'grasp blue cup'
-    assert b['objects'] == [{'name': 'blue cup', 'description': 'blue ceramic cup'}, {'name': 'saucer', 'description': 'white saucer'}]
+    assert b['objects'] == [{'name': 'blue cup', 'description': 'blue ceramic cup', 'object_class': None},
+        {'name': 'saucer', 'description': 'white saucer', 'object_class': None}]
     assert answers[1]['task']['task'] == 'place blue mug onto saucer'  # input untouched
     c = apply_vocabulary(answers[2], maps)
     assert c['task']['task'] == 'put the red cup on the saucer' and c['task']['objects'] == ['red cup', 'saucer']
