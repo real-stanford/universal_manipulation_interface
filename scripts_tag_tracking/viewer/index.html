@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Episode review</title>
+<style>
+  :root { --line: #ddd; --muted: #777; --fail: #b3261e; --warn: #9a6700; --pass: #1a7f37; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #222; background: #fafafa; }
+  header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fff; }
+  header select { min-width: 420px; }
+  header .spacer { flex: 1; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 440px; height: calc(100vh - 45px); }
+  #left { padding: 10px; overflow: auto; }
+  #right { border-left: 1px solid var(--line); background: #fff; overflow: auto; }
+  .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .videos figure { margin: 0; position: relative; background: #000; }
+  .videos figure.head { grid-column: 1 / 3; }
+  .videos video { width: 100%; display: block; }
+  .videos figcaption { position: absolute; left: 6px; top: 4px; color: #fff; font-size: 12px; text-shadow: 0 0 3px #000; }
+  .videos .missing { color: #aaa; padding: 40px; text-align: center; }
+  .controls { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+  .controls .time { font-variant-numeric: tabular-nums; min-width: 150px; }
+  canvas { width: 100%; display: block; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
+  section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 2px 8px; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .list div { padding: 2px 0; }
+  .click { cursor: pointer; }
+  .click:hover { background: #f0f4fa; }
+  .fail { color: var(--fail); } .warn { color: var(--warn); } .pass { color: var(--pass); }
+  label { display: block; margin: 6px 0 2px; color: var(--muted); }
+  input[type=text], textarea, select { width: 100%; font: inherit; padding: 3px 5px; border: 1px solid #ccc; border-radius: 3px; }
+  textarea { resize: vertical; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .row label { margin: 0; color: inherit; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 3px; vertical-align: top; border-top: 1px solid #eee; }
+  td.t { white-space: nowrap; color: var(--muted); }
+  td input { width: 100%; font: inherit; padding: 1px 3px; border: 1px solid #ddd; }
+  button { font: inherit; padding: 3px 10px; }
+  .saved { color: var(--muted); margin-left: 8px; }
+  .small { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <button id="prev" title="Previous episode ([)">&larr;</button>
+  <select id="episode"></select>
+  <button id="next" title="Next episode (])">&rarr;</button>
+  <span class="spacer"></span>
+  <span id="session" class="small"></span>
+</header>
+<main>
+  <div id="left">
+    <div class="videos" id="videos"></div>
+    <div class="controls">
+      <button id="play" title="Space">Play</button>
+      <button id="back" title="Left arrow: one frame, Shift: 1 s">&minus;1f</button>
+      <button id="fwd" title="Right arrow: one frame, Shift: 1 s">+1f</button>
+      <select id="rate"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select>
+      <span class="time" id="time"></span>
+      <span class="small" id="status"></span>
+    </div>
+    <canvas id="timeline" height="300"></canvas>
+    <div class="small">Rows: task interval, spans per arm (grey reset, blue approach, orange hold, green retract),
+      key events, gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
+  </div>
+  <div id="right">
+    <section><h2>Episode</h2><div class="kv" id="info"></div></section>
+    <section><h2>At the playhead</h2><div class="kv" id="now"></div></section>
+    <section><h2>Task (model)</h2><div class="kv" id="task"></div></section>
+    <section><h2>Key events</h2><div class="list" id="keys"></div></section>
+    <section><h2>Quality</h2><div class="list" id="quality"></div></section>
+    <section>
+      <h2>Review</h2>
+      <div class="row"><label><input type="checkbox" id="r-reviewed"> Reviewed</label>
+        <label><input type="checkbox" id="r-exclude"> Exclude episode</label></div>
+      <label for="r-reviewer">Reviewer</label><input type="text" id="r-reviewer">
+      <label for="r-task">Task sentence (empty: keep the model's)</label><textarea id="r-task" rows="2"></textarea>
+      <label for="r-outcome">Outcome</label><select id="r-outcome"></select>
+      <label for="r-faces">People's faces visible</label>
+      <select id="r-faces"><option value="">not checked</option><option value="false">no</option><option value="true">yes</option></select>
+      <label for="r-exclude-reason">Exclude reason</label><input type="text" id="r-exclude-reason">
+      <label>Spans (edit the words; times are measured)</label>
+      <table id="r-events"></table>
+      <label for="r-notes">Notes</label><textarea id="r-notes" rows="3"></textarea>
+      <p><button id="r-save">Save review</button><span class="saved" id="r-saved"></span></p>
+    </section>
+    <section>
+      <details><summary>Session declarations (delivery yaml)</summary>
+        <div id="decl"></div>
+      </details>
+    </section>
+  </div>
+</main>
+<script>
+const COLORS = {reset: '#cfcfcf', approach: '#9dbbe0', hold: '#e6b17a', retract: '#a8cfa8'};
+const $ = id => document.getElementById(id);
+let episodes = [], ep = null, videos = [], head = null, raf = null;
+
+async function api(url, body) {
+  const r = await fetch(url, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const fmt = t => t == null ? '-' : t.toFixed(2) + ' s';
+function kv(el, pairs) { el.innerHTML = pairs.map(([k, v]) => `<div>${esc(k)}</div><div>${v}</div>`).join(''); }
+function now() { return head ? head.currentTime + head.dataset.offset * 1 : 0; }
+
+async function loadList() {
+  const data = await api('/api/episodes');
+  episodes = data.episodes;
+  $('session').textContent = data.session;
+  $('episode').innerHTML = episodes.map((e, i) =>
+    `<option value="${i}">${esc(e.head)} #${e.number}  ${e.duration.toFixed(1)} s  ${e.status || 'not checked'}` +
+    `${e.annotated ? '' : '  not annotated'}${e.reviewed ? '  reviewed' : ''}${e.exclude ? '  excluded' : ''}</option>`).join('');
+}
+
+async function openEpisode(i) {
+  $('episode').value = i;
+  $('status').textContent = 'preparing video...';
+  ep = await api(`/api/episode?head=${encodeURIComponent(episodes[i].head)}&n=${episodes[i].number}`);
+  $('status').textContent = '';
+  $('videos').innerHTML = ep.videos.map((v, k) => v.url
+    ? `<figure class="${k === 0 ? 'head' : ''}"><video preload="auto" muted playsinline src="${v.url}" data-offset="${v.offset}"></video><figcaption>${esc(v.label)}</figcaption></figure>`
+    : `<figure class="${k === 0 ? 'head' : ''}"><div class="missing">${esc(v.label)}: no video</div></figure>`).join('');
+  videos = [...$('videos').querySelectorAll('video')];
+  head = videos[0];
+  videos.forEach(v => v.playbackRate = +$('rate').value);
+  if (head) head.readyState >= 1 ? seek(ep.task_start) : head.addEventListener('loadedmetadata', () => seek(ep.task_start), {once: true});
+  renderPanels();
+  renderReview();
+  loop();
+}
+
+function seek(t) {
+  if (!head) return;
+  t = Math.max(0, Math.min(ep.duration - 1e-3, t));
+  for (const v of videos) v.currentTime = Math.max(0, t - v.dataset.offset);
+}
+function follow() {
+  const t = now();
+  for (const v of videos.slice(1)) {
+    const target = t - v.dataset.offset;
+    if (Math.abs(v.currentTime - target) > (head.paused ? 0.5 / ep.fps : 0.05)) v.currentTime = Math.max(0, target);
+    if (head.paused !== v.paused) head.paused ? v.pause() : v.play().catch(() => {});
+  }
+}
+function loop() {
+  cancelAnimationFrame(raf);
+  const step = () => {
+    if (head) { follow(); drawTimeline(); renderNow(); $('time').textContent = `${now().toFixed(3)} / ${ep.duration.toFixed(2)} s`; }
+    $('play').textContent = head && !head.paused ? 'Pause' : 'Play';
+    raf = requestAnimationFrame(step);
+  };
+  raf = requestAnimationFrame(step);
+}
+function togglePlay() { if (head) head.paused ? head.play() : head.pause(); }
+function stepBy(dt) { if (head) { head.pause(); seek(now() + dt); } }
+
+function spans() { return ep.annotation ? ep.annotation.events : ep.measured.spans; }
+function keyEvents() { return ep.annotation ? ep.annotation.key_events : ep.measured.events; }
+
+function drawTimeline() {
+  const c = $('timeline'), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = 300;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const L = 60, R = 8, x = t => L + (w - L - R) * t / ep.duration;
+  g.font = '11px system-ui'; g.textBaseline = 'middle';
+  const label = (s, y) => { g.fillStyle = '#777'; g.fillText(s, 4, y); };
+  // seconds axis
+  g.strokeStyle = '#eee'; g.fillStyle = '#999';
+  const tick = ep.duration > 60 ? 10 : ep.duration > 20 ? 5 : 1;
+  for (let t = 0; t <= ep.duration; t += tick) {
+    g.beginPath(); g.moveTo(x(t), 14); g.lineTo(x(t), h); g.stroke(); g.fillText(t + 's', x(t) + 2, 7);
+  }
+  // task interval
+  label('task', 24); g.fillStyle = '#e8e8e8'; g.fillRect(x(0), 18, x(ep.duration) - x(0), 12);
+  g.fillStyle = '#7d8b99'; g.fillRect(x(ep.task_start), 18, x(ep.task_end) - x(ep.task_start), 12);
+  // spans per arm
+  ep.arms.forEach((arm, k) => {
+    const y = 38 + k * 26; label(arm, y + 10);
+    for (const s of spans().filter(s => s.arm === arm)) {
+      const phase = s.measured_phase || s.phase;
+      g.fillStyle = COLORS[phase] || '#ddd';
+      g.fillRect(x(s.start_s), y, Math.max(1, x(s.end_s) - x(s.start_s)) - 1, 20);
+      const text = phase === 'reset' ? '' : (s.verb || phase);
+      g.save(); g.beginPath(); g.rect(x(s.start_s), y, x(s.end_s) - x(s.start_s) - 2, 20); g.clip();
+      g.fillStyle = '#222'; g.fillText(text, x(s.start_s) + 3, y + 10); g.restore();
+    }
+  });
+  // key events
+  const yk = 38 + ep.arms.length * 26; label('events', yk + 6);
+  for (const k of keyEvents()) {
+    g.fillStyle = k.kind === 'subgoal_complete' ? '#1a7f37' : (k.measured_kind || k.kind) === 'open' ? '#4a7fb5' : '#c25b2a';
+    g.fillRect(x(k.t_s) - 1, yk, 3, 12);
+  }
+  // gripper opening and tracking
+  ep.arms.forEach((arm, k) => {
+    const y0 = yk + 22 + k * 64, hh = 46, s = ep.signals[arm];
+    label(arm + ' mm', y0 + hh / 2);
+    g.strokeStyle = '#eee'; g.strokeRect(x(0), y0, x(ep.duration) - x(0), hh);
+    const top = ep.signals.max_width_mm || 100;
+    g.strokeStyle = '#333'; g.beginPath(); let pen = false;
+    s.width.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      const px = x(ep.signals.time[i]), py = y0 + hh - hh * Math.min(1, v / top);
+      pen ? g.lineTo(px, py) : g.moveTo(px, py); pen = true;
+    });
+    g.stroke();
+    g.fillStyle = '#d33';
+    s.pose_valid.forEach((v, i) => { if (!v) g.fillRect(x(ep.signals.time[i]), y0 + hh + 2, 1.5, 4); });
+  });
+  // playhead
+  g.strokeStyle = '#d00'; g.beginPath(); g.moveTo(x(now()), 14); g.lineTo(x(now()), h); g.stroke();
+}
+$('timeline').addEventListener('click', e => {
+  const r = e.target.getBoundingClientRect(), L = 60, R = 8;
+  seek((e.clientX - r.left - L) / (r.width - L - R) * ep.duration);
+});
+
+function renderNow() {
+  const t = now();
+  kv($('now'), ep.arms.map(arm => {
+    const s = spans().find(s => s.arm === arm && s.start_s <= t && t < s.end_s);
+    const i = ep.signals.time.findIndex(x => x >= t);
+    const w = i >= 0 ? ep.signals[arm].width[i] : null;
+    const words = s && (s.measured_phase || s.phase) !== 'reset' ? [s.verb, s.object && 'object: ' + s.object, s.destination && 'to: ' + s.destination].filter(Boolean).join(', ') : '';
+    return [arm, `${esc(s ? (s.measured_phase || s.phase) : '-')}${words ? ' &middot; ' + esc(words) : ''}` +
+      `<br><span class="small">opening ${w == null ? 'not measured' : w.toFixed(1) + ' mm'}</span>`];
+  }));
+}
+
+function renderPanels() {
+  const q = ep.quality;
+  kv($('info'), [
+    ['episode', `${esc(ep.head)} #${ep.number}`],
+    ['length', `${ep.duration.toFixed(2)} s, task ${fmt(ep.task_start)} - ${fmt(ep.task_end)}`],
+    ['task ends at', esc((ep.task_boundary || []).join(' / '))],
+    ['trim review', ep.task_review && ep.task_review.length ? `<span class="warn">${esc(ep.task_review.join(', '))} cut at the dock: check</span>` : 'no'],
+    ['validation', q ? `<span class="${q.status}">${q.status}</span>` : 'not checked (11_check_quality.py)'],
+  ]);
+  const a = ep.annotation, t = a && a.tasks[0];
+  if (!a) kv($('task'), [['', 'not annotated (08_annotate_episodes.py); spans are the measured ones']]);
+  else {
+    const classes = Object.fromEntries((a.objects || []).map(o => [o.name, o.object_class]));
+    kv($('task'), [
+      ['task', esc(t.task)], ['skill', esc(t.skill)], ['difficulty', esc(t.difficulty ?? '-')],
+      ['outcome', `${esc(t.outcome)} (confidence ${t.confidence ?? '-'})`], ['completed at', fmt(t.completed_at_s)],
+      ['objects', t.objects.map(o => esc(o) + (classes[o] ? ` <span class="small">${esc(classes[o])}</span>` : '')).join(', ')],
+      ['main object', esc(t.main_object ?? '-')],
+      ['variants', (t.instruction_variants || []).map(esc).join('<br>')],
+      ['source', esc(a.annotation_source + ', ' + a.annotation_model) + (a.label_normalization ? ', vocabulary applied' : '')],
+    ]);
+  }
+  $('keys').innerHTML = keyEvents().map(k => `<div class="click" data-t="${k.t_s}">${k.t_s.toFixed(2)} s &nbsp;` +
+    `${esc(k.arm || '')} ${esc(k.label || k.kind)}${k.outcome ? ' <span class="small">' + esc(k.outcome) + '</span>' : ''}` +
+    `${k.note ? '<br><span class="small">' + esc(k.note) + '</span>' : ''}</div>`).join('') || '<div class="small">none</div>';
+  $('quality').innerHTML = q ? (q.checks.length ? q.checks.map(c => `<div><span class="${c.status}">${c.status}</span> ` +
+    `${esc(c.check)} (${esc(c.scope)}): ${esc(typeof c.value === 'object' ? JSON.stringify(c.value) : c.value)}` +
+    `${c.detail ? ' <span class="small">' + esc(c.detail) + '</span>' : ''}</div>`).join('') : '<div class="pass">all checks pass</div>')
+    : '<div class="small">not checked</div>';
+  document.querySelectorAll('#keys .click').forEach(d => d.onclick = () => seek(+d.dataset.t));
+}
+
+function renderReview() {
+  const r = ep.review, model = ep.annotation && ep.annotation.tasks[0];
+  $('r-reviewed').checked = r.reviewed; $('r-exclude').checked = r.exclude;
+  $('r-reviewer').value = r.reviewer || localStorage.getItem('reviewer') || '';
+  $('r-task').value = r.task.task || ''; $('r-task').placeholder = model ? model.task : '';
+  $('r-outcome').innerHTML = `<option value="">model: ${esc(model ? model.outcome : 'none')}</option>` +
+    ep.outcomes.map(o => `<option ${r.task.outcome === o ? 'selected' : ''}>${o}</option>`).join('');
+  $('r-faces').value = r.faces_visible == null ? '' : String(r.faces_visible);
+  $('r-exclude-reason').value = r.exclude_reason || ''; $('r-notes').value = r.notes || '';
+  const rows = spans().filter(s => (s.measured_phase || s.phase) !== 'reset');
+  $('r-events').innerHTML = '<tr><td></td><td>verb</td><td>object</td><td>destination</td></tr>' + rows.map(s => {
+    const key = `${s.arm}@${s.start_s.toFixed(3)}`, edit = r.events[key] || {};
+    const cell = f => `<td><input data-key="${key}" data-f="${f}" value="${esc(edit[f] || '')}" placeholder="${esc(s[f] || '')}"></td>`;
+    return `<tr><td class="t click" data-t="${s.start_s}">${s.start_s.toFixed(1)} ${esc(s.arm)}<br>${esc(s.measured_phase || s.phase)}</td>` +
+      cell('verb') + cell('object') + cell('destination') + '</tr>';
+  }).join('');
+  document.querySelectorAll('#r-events .click').forEach(d => d.onclick = () => seek(+d.dataset.t + 1e-3));
+  $('r-saved').textContent = r.reviewed_ts_utc ? 'last saved ' + r.reviewed_ts_utc.slice(0, 19).replace('T', ' ') + ' UTC' : '';
+}
+
+async function saveReview() {
+  const events = {};
+  document.querySelectorAll('#r-events input').forEach(i => {
+    if (i.value.trim()) (events[i.dataset.key] ||= {})[i.dataset.f] = i.value.trim();
+  });
+  const faces = $('r-faces').value;
+  const review = {
+    reviewed: $('r-reviewed').checked, reviewer: $('r-reviewer').value.trim(),
+    exclude: $('r-exclude').checked, exclude_reason: $('r-exclude-reason').value.trim(),
+    faces_visible: faces === '' ? null : faces === 'true',
+    task: {task: $('r-task').value.trim() || null, outcome: $('r-outcome').value || null},
+    events, notes: $('r-notes').value.trim(),
+  };
+  localStorage.setItem('reviewer', review.reviewer);
+  try {
+    ep.review = await api(`/api/review?head=${encodeURIComponent(ep.head)}&n=${ep.number}`, review);
+    $('r-saved').textContent = 'saved';
+    const e = episodes[$('episode').value]; e.reviewed = ep.review.reviewed; e.exclude = ep.review.exclude;
+    $('episode').options[$('episode').value].text = $('episode').options[$('episode').value].text
+      .replace(/  (reviewed|excluded)/g, '') + (e.reviewed ? '  reviewed' : '') + (e.exclude ? '  excluded' : '');
+  } catch (err) { $('r-saved').textContent = 'not saved: ' + err.message; }
+}
+
+async function loadDeclarations() {
+  const d = await api('/api/session');
+  if (!d.path) { $('decl').innerHTML = '<p class="small">Start the viewer with -d delivery.yaml to edit these.</p>'; return; }
+  const v = d.declarations;
+  const text = (k, l) => `<label>${l}</label><input type="text" id="d-${k}" value="${esc(v[k] || '')}">`;
+  $('decl').innerHTML = `<p class="small">${esc(d.session)} in ${esc(d.path)}</p>` +
+    `<label>Collection mode</label><select id="d-collection_mode"><option value="">not declared</option>` +
+    d.collection_modes.map(m => `<option ${v.collection_mode === m ? 'selected' : ''}>${m}</option>`).join('') + '</select>' +
+    `<label>Scene</label><div>` + d.scenes.map(s => `<label class="row" style="display:inline-flex;margin-right:10px">` +
+      `<input type="checkbox" class="d-scene" value="${s}" ${(v.scene_tags || []).includes(s) ? 'checked' : ''}> ${s}</label>`).join('') + '</div>' +
+    text('environment_id', 'Environment id') + text('operator_id', 'Operator id') + text('station_id', 'Station id') +
+    text('consent_reference', 'Consent reference') +
+    `<p><button id="d-save">Save declarations</button><span class="saved" id="d-saved"></span></p>`;
+  $('d-save').onclick = async () => {
+    const out = {collection_mode: $('d-collection_mode').value || null,
+      scene_tags: [...document.querySelectorAll('.d-scene:checked')].map(i => i.value)};
+    for (const k of ['environment_id', 'operator_id', 'station_id', 'consent_reference']) out[k] = $('d-' + k).value.trim() || null;
+    try { await api('/api/session', out); $('d-saved').textContent = 'saved'; }
+    catch (err) { $('d-saved').textContent = 'not saved: ' + err.message; }
+  };
+}
+
+$('episode').onchange = e => openEpisode(+e.target.value);
+$('prev').onclick = () => openEpisode(Math.max(0, +$('episode').value - 1));
+$('next').onclick = () => openEpisode(Math.min(episodes.length - 1, +$('episode').value + 1));
+$('play').onclick = togglePlay;
+$('back').onclick = () => stepBy(-1 / ep.fps);
+$('fwd').onclick = () => stepBy(1 / ep.fps);
+$('rate').onchange = e => videos.forEach(v => v.playbackRate = +e.target.value);
+$('r-save').onclick = saveReview;
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveReview(); return; }
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  else if (e.key === 'ArrowLeft') stepBy(e.shiftKey ? -1 : -1 / ep.fps);
+  else if (e.key === 'ArrowRight') stepBy(e.shiftKey ? 1 : 1 / ep.fps);
+  else if (e.key === '[') $('prev').click();
+  else if (e.key === ']') $('next').click();
+});
+
+loadList().then(() => { loadDeclarations(); if (episodes.length) openEpisode(0); })
+  .catch(err => { $('status').textContent = err.message; });
+</script>
+</body>
+</html>
