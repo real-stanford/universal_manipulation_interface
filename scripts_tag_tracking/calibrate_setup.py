@@ -13,7 +13,9 @@ From one session of the setup, processed up to segment_episodes
    the readout direction is estimated);
 4. each cube to its wrist camera: wrist frames with >= 2 environment tags
    (wrist demos/*/tag_detection.pkl) and the cube tracked by the head camera
-   at the same time (audio_sync_offsets.json);
+   at the same time: audio sync start times (audio_sync_offsets.json), with
+   --wrist_sync also the motion sync correction of a previous run of the
+   session (tag_tracking/wrist_sync.json, 03s_sync_wrists.py; second pass);
 5. wrist camera to TCP from the gripper geometry (gripper config
    cam_to_center_height / cam_to_mount_offset / tcp_offset, per gripper under
    grippers.<camera serial> or shared at the top level, defaults as UMI;
@@ -32,6 +34,8 @@ Bodies are calibrated in parallel and tracking passes are split over
 
 python scripts_tag_tracking/calibrate_setup.py -i data_workspace/session -c umi_calib/tag_tracking.yaml -o umi_calib/setup_20261116 -j 24
 python scripts_tag_tracking/calibrate_setup.py -c umi_calib/tag_tracking.yaml -o umi_calib/setup_20261116 --tcp_only
+Second pass, wrist clocks from the motion sync of the first pass:
+python scripts_tag_tracking/calibrate_setup.py -i data_workspace/session -c umi_calib/tag_tracking.yaml -o umi_calib/setup_20261116 -ws data_workspace/session/tag_tracking/wrist_sync.json -j 24
 """
 # %%
 import sys
@@ -53,6 +57,7 @@ from umi.common.exiftool_util import ExifTool
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.parallel import make_executor, CHUNKS_PER_WORKER
+from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
 from umi.tag_tracking.setup_calibration import (frames_with_neighbors, select_cube_frames, calibrate_bodies,
     cube_to_wrist, wrist_to_tcp_umi, UMI_CAM_TO_CENTER_HEIGHT, UMI_CAM_TO_MOUNT_OFFSET, UMI_TCP_OFFSET)
 
@@ -70,9 +75,11 @@ from umi.tag_tracking.setup_calibration import (frames_with_neighbors, select_cu
 @click.option('--tcp_only', is_flag=True, default=False, help='Only recompute wrist to TCP in an existing calibration')
 @click.option('--readout_ms', type=float, default=None, help='Sensor readout time (ms), default from the head video metadata')
 @click.option('--search_line_delay', is_flag=True, default=False, help='Ignore the readout time, search the line delay')
+@click.option('-ws', '--wrist_sync', default=None,
+    help='wrist_sync.json of a previous run of this session: wrist clocks with the motion sync correction')
 @click.option('-j', '--num_workers', type=int, default=None, help='Worker processes, default all cores')
 def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tcp_only, readout_ms,
-        search_line_delay, num_workers):
+        search_line_delay, wrist_sync, num_workers):
     t_start = time.time()
     output = pathlib.Path(os.path.expanduser(output)).absolute()
     config = load_tag_tracking_config(config)
@@ -127,6 +134,10 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
     heads = [x for x in videos if x['camera_serial'] == config['head_camera']]
     assert len(heads) == 1, f"one head task video expected for the setup calibration, found {len(heads)}"
     head = heads[0]
+    corrections = dict()
+    if wrist_sync is not None:
+        corrections = wrist_corrections(json.load(open(os.path.expanduser(wrist_sync), 'r')), head['name'])
+        print(f"wrist clocks: audio sync + motion sync of {wrist_sync} ({len(corrections)} wrist videos)")
     head_frames = pickle.load(head['dir'].joinpath('tag_corners.pkl').open('rb'))
     head_times = np.array([f['time'] for f in head_frames])
     body_frames = {static_name: env_frames}
@@ -181,8 +192,16 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
             detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
             wrist_frames += [{'time': d['time'], 'corners': {k: v['corners'] for k, v in d['tag_dict'].items()}}
                 for d in detections]
-            wrist_times += [d['time'] + wrist['start_timestamp'] - head['start_timestamp'] for d in detections]
-        result = cube_to_wrist(head_camera, head_frames, head_times, T_env_tags, results[name]['T_body_tags'],
+            t = np.array([d['time'] for d in detections]) + wrist['start_timestamp'] - head['start_timestamp']
+            if wrist['name'] in corrections:
+                t = t + correction_seconds(corrections[wrist['name']], t)
+            elif wrist_sync is not None:
+                print(f"  {name} {wrist['name']}: no motion sync correction in {wrist_sync}, audio sync only")
+            wrist_times += t.tolist()
+        # head poses tracked with the rolling shutter correction refer to the middle row's time
+        # (umi.tag_tracking.wrist_sync.observation_times): frame time + line delay * rows / 2
+        cube_times = head_times + 0.5 * abs(line_delay) * head_camera.image_size[1]
+        result = cube_to_wrist(head_camera, head_frames, cube_times, T_env_tags, results[name]['T_body_tags'],
             config['tag_sizes'], noise_model, line_delay, config['cameras'][serial], wrist_frames,
             np.array(wrist_times), config['sigma_px'], config['accuracy'], max_samples, max_speed,
             executor=executor, n_chunks=n_chunks)
@@ -215,6 +234,7 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
         'variance_factor': {name: x['variance_factor'] for name, x in results.items()},
         'line_delay_us': line_delay * 1e6,
         'readout_ms': None if readout_time is None else readout_time * 1000,
+        'wrist_clocks': 'audio sync' if wrist_sync is None else f'audio sync + motion sync ({wrist_sync})',
         'T_wrist_tcp': {name: T.tolist() for name, T in T_wrist_tcps.items()},
         'cube_to_wrist': report_grippers
     }, output.joinpath('report.json').open('w'), indent=2)
