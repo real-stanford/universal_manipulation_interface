@@ -41,19 +41,11 @@ import pathlib
 import pickle
 import click
 import numpy as np
-from umi.common.exiftool_util import ExifTool
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration
-from umi.tag_tracking.wrist_sync import DEFAULTS, cube_image_rows, sync_episodes, drift_line, fit_readout
-
-
-def head_readout_ms(head: dict) -> float:
-    with ExifTool() as et:
-        meta = list(et.get_metadata(str(head['dir'].joinpath('raw_video.mp4'))))[0]
-    value = meta.get('QuickTime:SensorReadoutTime')
-    assert value not in (None, ''), f"{head['name']}: no SensorReadoutTime in the metadata, pass --readout_ms"
-    return float(value)
+from umi.tag_tracking.wrist_sync import (DEFAULTS, cube_image_rows, sync_episodes, drift_line, fit_readout,
+    observation_times, head_readout)
 
 
 # %%
@@ -76,15 +68,18 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
     names = [name for _, name in sorted((b['robot_index'], name)
         for name, b in config['bodies'].items() if 'gripper_camera' in b)]
     videos = get_session_videos(session)
+    # line delay the head tracking corrected (setup calibration): fixes when a tracked pose was observed
+    line_delay = json.load(session.joinpath('tag_tracking', 'bodies.json').open('r'))['line_delay']
 
     out = {'parameters': params, 'videos': dict(), 'readout': dict(), 'pairs': dict()}
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         times = track['time']
         head_episodes = episodes[head['name']]['episodes']
-        readout = head_readout_ms(head) if readout_ms is None else readout_ms
+        readout = head_readout(head) * 1e3 if readout_ms is None else readout_ms
         source = 'metadata SensorReadoutTime' if readout_ms is None else '--readout_ms'
-        print(f"{head['name']}: {len(head_episodes)} episodes, head readout {readout:.1f} ms ({source})")
+        print(f"{head['name']}: {len(head_episodes)} episodes, head readout {readout:.1f} ms ({source}), "
+            f"tracking line delay {line_delay * 1e6:.3f} us")
 
         results, readout_samples = dict(), list()
         for name in names:
@@ -96,17 +91,19 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
             T = body['T_world_body']
             valid = body['is_valid_world'] & ~np.isnan(T[:, 0, 0])
             rows = cube_image_rows(body['T_cam_body'], head_camera, height)
+            obs = observation_times(times, rows, readout * 1e-3, line_delay, height)
+            obs0 = observation_times(times, rows, 0.0, line_delay, height)
             for wrist in overlapping(videos, head, serial):
                 imu = load_imu(str(wrist['dir'].joinpath('imu_data.json')))
                 # wrist IMU -> wrist video (OpenICC offset) -> head video clock (audio sync start times)
                 gyro_times = imu['time'] + cam_imu['time_offset'] + wrist['start_timestamp'] - head['start_timestamp']
                 gyro_cube = imu['gyro'] @ R_cube_imu.T
-                fits = sync_episodes(times, rows, T, valid, head_episodes, gyro_times, gyro_cube, readout * 1e-3, params)
+                fits = sync_episodes(times, obs, rows, T, valid, head_episodes, gyro_times, gyro_cube, params)
                 line = drift_line(fits)
                 results[wrist['name']] = {'gripper': name, 'robot_index': config['bodies'][name]['robot_index'],
                     'line': line, 'start': wrist['start_timestamp'], 'end': wrist['end_timestamp']}
                 # readout check: the same episodes without the rolling shutter
-                for e, f in sync_episodes(times, rows, T, valid, head_episodes, gyro_times, gyro_cube, 0.0, params):
+                for e, f in sync_episodes(times, obs0, rows, T, valid, head_episodes, gyro_times, gyro_cube, params):
                     if f is not None:
                         readout_samples.append((wrist['name'], 0.5 * (e['start'] + e['end']), f['correction'], f['row']))
                 if line is None:
@@ -145,7 +142,8 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
             + [f"{results[p['a']]['gripper']}-{results[p['b']]['gripper']} {p['accuracy_ms']:.2f} ms"
             for p in pairs if p['accuracy_ms'] is not None]))
         out['videos'][head['name']] = results
-        out['readout'][head['name']] = {'used_ms': readout, 'source': source, 'fit': fit}
+        out['readout'][head['name']] = {'used_ms': readout, 'source': source, 'fit': fit,
+            'tracking_line_delay_us': line_delay * 1e6}
         out['pairs'][head['name']] = pairs
 
     output = session.joinpath('tag_tracking', 'wrist_sync.json') if output is None else pathlib.Path(output)

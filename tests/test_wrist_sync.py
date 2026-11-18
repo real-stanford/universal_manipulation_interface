@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
-from umi.tag_tracking.wrist_sync import sync_episodes, drift_line, fit_readout, correction_seconds
+from umi.tag_tracking.wrist_sync import sync_episodes, drift_line, fit_readout, correction_seconds, observation_times
 
 FPS = 60000 / 1001
 GYRO_RATE = 197.13
@@ -55,7 +55,9 @@ def test_sync_and_readout():
     gyro += rng.normal(scale=0.005, size=gyro.shape)
     reported = true_gyro_times - ERROR(true_gyro_times)
 
-    fits = sync_episodes(times, rows, T, valid, episodes, reported, gyro, READOUT, {})
+    # tracked without rolling shutter correction: each pose observed when its rows were read
+    fits = sync_episodes(times, observation_times(times, rows, READOUT, 0.0, 2028), rows, T, valid, episodes,
+        reported, gyro, {})
     assert len(fits) == len(episodes) and all(f is not None for _, f in fits)
     errors = np.array([f['correction'] - ERROR(0.5 * (e['start'] + e['end'])) for e, f in fits])
     sigmas = np.array([f['sigma'] for _, f in fits])
@@ -68,10 +70,20 @@ def test_sync_and_readout():
     assert line['residual_ms'] < 0.3, line['residual_ms']
 
     # without the rolling shutter the corrections shift by -readout * row; the readout fit recovers it
-    fits0 = sync_episodes(times, rows, T, valid, episodes, reported, gyro, 0.0, {})
+    fits0 = sync_episodes(times, observation_times(times, rows, 0.0, 0.0, 2028), rows, T, valid, episodes,
+        reported, gyro, {})
     samples = [('wrist', 0.5 * (e['start'] + e['end']), f['correction'], f['row']) for e, f in fits0]
     readout = fit_readout(samples)
     assert abs(readout['readout_ms'] - READOUT * 1e3) < 2.0, readout
+
+
+def test_observation_times():
+    times = np.array([1.0, 1.0, 1.0])
+    rows = np.array([0.0, 0.5, 1.0])
+    # without rolling shutter correction: the rows' own read times
+    assert np.allclose(observation_times(times, rows, READOUT, 0.0, 2028), 1.0 + READOUT * rows)
+    # corrected tracking: the middle row's time for every pose
+    assert np.allclose(observation_times(times, rows, READOUT, READOUT / 2028, 2028), 1.0 + READOUT / 2)
 
 
 def test_no_motion():
@@ -80,8 +92,9 @@ def test_no_motion():
     valid = np.ones(len(times), dtype=bool)
     gyro_times = np.arange(0.0, 60.0, 1 / GYRO_RATE)
     gyro = np.zeros((len(gyro_times), 3))
-    fits = sync_episodes(times, np.full(len(times), 0.5), T, valid, [{'start': 10.0, 'end': 25.0}],
-        gyro_times, gyro, READOUT, {})
+    rows = np.full(len(times), 0.5)
+    fits = sync_episodes(times, observation_times(times, rows, READOUT, 0.0, 2028), rows, T, valid,
+        [{'start': 10.0, 'end': 25.0}], gyro_times, gyro, {})
     # flat cost: no minimum inside the search range, or a meaningless one with infinite sigma
     assert fits[0][1] is None or not np.isfinite(fits[0][1]['sigma']) or fits[0][1]['motion_rms'] == 0.0
     assert drift_line(fits) is None
@@ -89,5 +102,6 @@ def test_no_motion():
 
 if __name__ == '__main__':
     test_sync_and_readout()
+    test_observation_times()
     test_no_motion()
     print("all passed")

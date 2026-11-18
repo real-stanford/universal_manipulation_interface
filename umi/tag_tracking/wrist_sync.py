@@ -16,9 +16,10 @@ gyro (rotated into the cube frame) averaged over the same interval shifted
 by a time shift; the shift minimizing the squared difference (grid +
 parabola) gives the episode's correction: the time to add to the wrist
 video's times (relative to the audio sync start times) to put them on the
-head video clock. Head rolling shutter: a cube observation is timed at
-frame time + readout * (cube image row / image height), top row first
-(SensorReadoutTime, confirmed on task1/task3: +9.3 +- 2.7 and +12.4 +- 3.6 ms
+head video clock. Head rolling shutter: each cube pose is timed when it was
+observed (observation_times: its rows, or the middle row with rolling shutter
+corrected tracking), top row first (SensorReadoutTime, confirmed on
+task1/task3 tracked without correction: +9.3 +- 2.7 and +12.4 +- 3.6 ms
 against 11 ms metadata).
 
 Per wrist video, a robust drift line through the episodes' corrections
@@ -39,17 +40,31 @@ DEFAULTS = {
 }
 
 
-def head_rotation_rates(times: np.ndarray, rows: np.ndarray, T_world_body: np.ndarray, valid: np.ndarray,
-        interval: int, readout: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def observation_times(times: np.ndarray, rows: np.ndarray, readout: float, line_delay: float,
+        image_height: int) -> np.ndarray:
+    """
+    When a head-tracked pose was observed, on the head video clock (frame time =
+    first row read). Rows are read top first over the readout time; tracking
+    with rolling shutter correction (line_delay, umi.tag_tracking.rolling_shutter)
+    moves every corner to the middle row's time. So: frame time + readout * row
+    - (row - 0.5) * image_height * line_delay; line delay 0: when the pose's
+    own rows (row: 0 top .. 1 bottom) were read; line delay = readout / height:
+    the middle row's time, frame time + readout / 2.
+    """
+    return times + readout * rows - (rows - 0.5) * image_height * line_delay
+
+
+def head_rotation_rates(obs_times: np.ndarray, rows: np.ndarray, T_world_body: np.ndarray, valid: np.ndarray,
+        interval: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Mean body-frame angular velocity of the cube between head frames k and
     k + interval, both valid: (t0, t1, omega (N,3), mean image row in [0, 1]);
-    frame times plus readout * row (rolling shutter).
+    obs_times: observation_times of the poses.
     """
     k0 = np.flatnonzero(valid[:-interval] & valid[interval:])
     k1 = k0 + interval
-    t0 = times[k0] + readout * rows[k0]
-    t1 = times[k1] + readout * rows[k1]
+    t0 = obs_times[k0]
+    t1 = obs_times[k1]
     R0 = Rotation.from_matrix(T_world_body[k0, :3, :3])
     R1 = Rotation.from_matrix(T_world_body[k1, :3, :3])
     rotvec = (R0.inv() * R1).as_rotvec()
@@ -111,11 +126,12 @@ def cube_image_rows(T_cam_body: np.ndarray, camera, image_height: int) -> np.nda
     return np.clip(rows, 0.0, 1.0)
 
 
-def sync_episodes(times: np.ndarray, rows: np.ndarray, T_world_body: np.ndarray, valid: np.ndarray,
-        episodes: Sequence[dict], gyro_times: np.ndarray, gyro_cube: np.ndarray, readout: float,
+def sync_episodes(times: np.ndarray, obs_times: np.ndarray, rows: np.ndarray, T_world_body: np.ndarray,
+        valid: np.ndarray, episodes: Sequence[dict], gyro_times: np.ndarray, gyro_cube: np.ndarray,
         params: Dict) -> List[Tuple[dict, Optional[dict]]]:
     """
     fit_shift per episode ({'start', 'end'} head video seconds) the gyro covers.
+    times: head frame times; obs_times: observation_times of the cube poses.
     gyro_times: head video clock under the current sync; gyro_cube: (N,3) rad/s in the cube frame.
     """
     params = {**DEFAULTS, **params}
@@ -126,8 +142,8 @@ def sync_episodes(times: np.ndarray, rows: np.ndarray, T_world_body: np.ndarray,
         if not (gyro_times[0] < e['start'] and e['end'] < gyro_times[-1]):
             continue
         in_episode = valid & (times >= e['start']) & (times <= e['end'])
-        t0, t1, omega, pair_rows = head_rotation_rates(times, rows, T_world_body, in_episode,
-            params['interval_frames'], readout)
+        t0, t1, omega, pair_rows = head_rotation_rates(obs_times, rows, T_world_body, in_episode,
+            params['interval_frames'])
         out.append((e, fit_shift(t0, t1, omega, pair_rows, gyro_times, integral, shifts, params['min_pairs'])))
     return out
 
@@ -189,6 +205,18 @@ def fit_readout(samples: Sequence[Tuple[str, float, float, float]], n_sigma: flo
     covariance = np.sum(residual[keep] ** 2) / dof * np.linalg.inv(A[keep].T @ A[keep])
     return {'readout_ms': float(x[-1]), 'sigma_ms': float(np.sqrt(covariance[-1, -1])),
         'n_episodes': int(keep.sum()), 'row_min': float(rows[keep].min()), 'row_max': float(rows[keep].max())}
+
+
+def head_readout(head: dict) -> float:
+    """
+    Rolling shutter readout time (s) of a head video: GoPro SensorReadoutTime.
+    """
+    from umi.common.exiftool_util import ExifTool
+    with ExifTool() as et:
+        meta = list(et.get_metadata(str(head['dir'].joinpath('raw_video.mp4'))))[0]
+    value = meta.get('QuickTime:SensorReadoutTime')
+    assert value not in (None, ''), f"{head['name']}: no SensorReadoutTime in the metadata"
+    return float(value) * 1e-3
 
 
 def correction_seconds(line: dict, head_time) -> np.ndarray:

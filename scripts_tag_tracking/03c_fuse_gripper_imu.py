@@ -38,7 +38,8 @@ from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_no
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.parallel import make_executor, submit_fuse
 from umi.tag_tracking.gripper_fusion import wrist_measurements, init_poses
-from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
+from umi.tag_tracking.wrist_sync import (wrist_corrections, correction_seconds, head_readout, cube_image_rows,
+    observation_times)
 
 
 # %%
@@ -75,6 +76,9 @@ def main(input, config, max_head_gap, num_workers):
         windows = track.get('windows', [(0, len(head_times))])
         track['grippers'] = dict()
         corrections = wrist_corrections(sync, head['name'])
+        # when the head observed each cube pose (rolling shutter, tracking line delay)
+        head_camera = config['cameras'][config['head_camera']]
+        readout = head_readout(head)
         for name in names:
             serial = config['bodies'][name]['gripper_camera']
             assert serial in config['gripper_imu'], f"no gripper_imu for camera {serial} ({name})"
@@ -83,6 +87,8 @@ def main(input, config, max_head_gap, num_workers):
             imu_noise = load_imu_noise(config['gripper_imu'][serial]['noise_setting'])
             T_cube_wrist = np.array(tcp[name]['T_cube_wrist'])
             body = track['bodies'][name]
+            cube_times = observation_times(head_times, cube_image_rows(body['T_cam_body'], head_camera,
+                head_camera.image_size[1]), readout, calibration['line_delay'], head_camera.image_size[1])
 
             jobs = list()
             for wrist in overlapping(videos, head, serial):
@@ -101,7 +107,7 @@ def main(input, config, max_head_gap, num_workers):
                         continue
                     frames = [{'time': float(wrist_times[i]), 'corners': {k: v['corners']
                         for k, v in detections[i]['tag_dict'].items() if k in T_env_tags}} for i in inside]
-                    measurements = wrist_measurements(on_head[inside], head_times, body['T_world_body'],
+                    measurements = wrist_measurements(on_head[inside], cube_times, body['T_world_body'],
                         body['world_covariance'], body['is_valid_world'], T_cube_wrist, max_head_gap)
                     init = init_poses(len(inside), measurements)
                     if init is None:
