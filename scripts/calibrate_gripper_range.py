@@ -12,7 +12,7 @@ import collections
 import pickle
 import json
 import numpy as np
-from umi.common.cv_util import get_gripper_width
+from umi.common.cv_util import get_gripper_width, get_finger_center_x
 
 
 # %%
@@ -90,13 +90,26 @@ def main(input, output, tag_det_threshold, nominal_z, gripper_id, left_id, right
     print(f"Gripper width measured in {np.isfinite(gripper_widths).mean() * 100:.1f}% of frames")
     max_width = np.nanmax(gripper_widths)
     min_width = np.nanmin(gripper_widths)
+    # midpoint of the fingers in camera x, from frames with both finger tags: a width
+    # from one tag is twice its distance from it (UMI assumed the camera axis, 0)
+    centers = [get_finger_center_x(dt['tag_dict'], left_id, right_id, nominal_z=nominal_z)
+        for dt in tag_detection_results]
+    centers = np.array([c for c in centers if c is not None])
+    assert len(centers) > 0, "no frame with both finger tags"
+    finger_center_x = float(np.median(centers))
+    print(f"Finger midpoint {finger_center_x * 1000:+.2f} mm from the camera axis "
+        f"(5-95% {np.percentile(centers, 5) * 1000:+.2f}..{np.percentile(centers, 95) * 1000:+.2f} mm, "
+        f"{len(centers)} frames with both finger tags)")
 
     result = {
         'gripper_id': gripper_id,
         'left_finger_tag_id': left_id,
         'right_finger_tag_id': right_id,
         'max_width': max_width,
-        'min_width': min_width
+        'min_width': min_width,
+        'finger_center_x': finger_center_x,
+        'finger_center_x_p5_p95': [float(np.percentile(centers, 5)), float(np.percentile(centers, 95))],
+        'n_center_frames': int(len(centers))
     }
     json.dump(result, open(output, 'w'), indent=2)
 

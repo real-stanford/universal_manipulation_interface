@@ -20,7 +20,7 @@ import json
 import pathlib
 import numpy as np
 from scipy.spatial.transform import Rotation
-from umi.common.cv_util import get_gripper_width
+from umi.common.cv_util import get_gripper_width, get_finger_center_x
 from umi.common.exiftool_util import ExifTool
 from umi.common.interpolation_util import get_gripper_calibration_interpolator
 
@@ -106,25 +106,33 @@ def load_gripper_range(session: pathlib.Path, serial: str) -> Dict:
 
 
 def finger_widths(detections: Sequence[dict], left_tag: int, right_tag: int, nominal_z: float,
-        gripper_range: Dict) -> Tuple[np.ndarray, np.ndarray]:
+        gripper_range: Dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Per wrist frame: gripper width (m, NaN if no finger tag detected) and the
-    number of finger tags it is from (2: both; 1: one tag, the other finger
-    assumed symmetric as in UMI's get_gripper_width). Width as in UMI: the finger
-    opening relative to fully closed, finger tag distance - its closed value,
-    0 (closed) .. max_width - min_width of gripper_range.json (fully open).
+    Per wrist frame: gripper width (m, NaN if no finger tag detected), the
+    number of finger tags it is from (2: both; 1: twice the tag's distance from
+    the fingers' midpoint finger_center_x of the gripper range calibration, the
+    camera axis if the calibration has none, as in UMI) and the midpoint of
+    the two finger tags where both are detected (NaN elsewhere; for checking
+    the calibrated midpoint). Width as in UMI: the finger opening relative to
+    fully closed, finger tag distance - its closed value, 0 (closed) ..
+    max_width - min_width of gripper_range.json (fully open).
     """
+    center_x = gripper_range.get('finger_center_x', 0.0)
     calibrate = get_gripper_calibration_interpolator(
         aruco_measured_width=[gripper_range['min_width'], gripper_range['max_width']],
         aruco_actual_width=[gripper_range['min_width'], gripper_range['max_width']])
     widths = np.full(len(detections), np.nan)
     n_tags = np.zeros(len(detections), dtype=int)
+    centers = np.full(len(detections), np.nan)
     for k, d in enumerate(detections):
-        width = get_gripper_width(d['tag_dict'], left_tag, right_tag, nominal_z=nominal_z)
+        width = get_gripper_width(d['tag_dict'], left_tag, right_tag, nominal_z=nominal_z, center_x=center_x)
         if width is not None:
             widths[k] = float(calibrate(width))
             n_tags[k] = int(left_tag in d['tag_dict']) + int(right_tag in d['tag_dict'])
-    return widths, n_tags
+        c = get_finger_center_x(d['tag_dict'], left_tag, right_tag, nominal_z=nominal_z)
+        if c is not None:
+            centers[k] = c
+    return widths, n_tags, centers
 
 
 def episode_frames(head_times: np.ndarray, head_T_world_cam: np.ndarray, head_valid: np.ndarray,
@@ -211,23 +219,26 @@ def gripper_streams(session: pathlib.Path, config: Dict, videos: List[dict], hea
             pose_valid, source = b['is_valid_world'], 'head_camera_tags'
         gripper = hardware['grippers'][serial]
         gripper_range = load_gripper_range(session, serial)
-        width_times, widths, width_tags = list(), list(), list()
+        width_times, widths, width_tags, centers = list(), list(), list(), list()
         for wrist in overlapping(videos, head, serial):
             detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
             t = np.array([d['time'] for d in detections]) + wrist['start_timestamp'] - head['start_timestamp']
             if wrist['name'] in corrections:
                 t = t + correction_seconds(corrections[wrist['name']], t)
-            w, n = finger_widths(detections, gripper['left_finger_tag_id'], gripper['right_finger_tag_id'],
+            w, n, c = finger_widths(detections, gripper['left_finger_tag_id'], gripper['right_finger_tag_id'],
                 hardware['nominal_z'], gripper_range)
             width_times.append(t)
             widths.append(w)
             width_tags.append(n)
+            centers.append(c)
         order = np.argsort(np.concatenate(width_times))
         out.append({
             'name': name, 'side': sides.get(body['robot_index'], str(body['robot_index'])), 'pose_source': source,
             'pose_times': pose_times, 'T_world_tcp': T_world_tcp, 'pose_valid': pose_valid,
             'width_times': np.concatenate(width_times)[order], 'widths': np.concatenate(widths)[order],
             'width_tags': np.concatenate(width_tags)[order], 'gripper_range': gripper_range,
+            # finger midpoint in this session's frames with both tags, against the calibrated one
+            'session_center_x': float(np.nanmedian(np.concatenate(centers))) if np.any(~np.isnan(np.concatenate(centers))) else None,
             'T_cube_tcp': np.array(tcp[name]['T_cube_tcp']),
         })
     return out

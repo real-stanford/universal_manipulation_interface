@@ -163,6 +163,15 @@ def main(input, config):
                 f"lowest TCP {np.nanmin(z) * 100:.1f} cm (1st percentile {np.nanpercentile(z, 1) * 100:.1f} cm), "
                 f"widths outside the calibrated range {t['width_out']}, from one finger tag "
                 f"{t['one_tag'] / max(t['width_measured'], 1) * 100:.1f}%")
+            g = [x for x in grippers if x['side'] == side][0]
+            calibrated = g['gripper_range'].get('finger_center_x')
+            print(f"    finger midpoint: calibration video "
+                + ('not measured (rerun gripper_range), one-tag widths assume the camera axis' if calibrated is None
+                    else f"{calibrated * 1000:+.2f} mm") + ", this session's two-tag frames "
+                + ('-' if g['session_center_x'] is None else f"{g['session_center_x'] * 1000:+.2f} mm")
+                + ('' if calibrated is None or g['session_center_x'] is None else
+                    f" (difference {(g['session_center_x'] - calibrated) * 1000:+.2f} mm, one-tag width error up to "
+                    f"{2 * abs(g['session_center_x'] - calibrated) * 1000:.1f} mm)"))
             print(f"    D coverage: aligned pose {t['aligned'] / max(t['rows'], 1) * 100:.1f}% of rows, native pose valid "
                 f"{t['native_valid'] / max(t['native'], 1) * 100:.1f}% of {t['native']} wrist frames, width measured "
                 f"{t['width_measured'] / max(t['width'], 1) * 100:.1f}%")

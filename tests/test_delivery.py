@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-from umi.tag_tracking.delivery import align_poses, align_values, episode_frames, pose7
+from umi.tag_tracking.delivery import align_poses, align_values, episode_frames, pose7, finger_widths
 
 FPS = 60000 / 1001
 
@@ -86,8 +86,28 @@ def test_episode_frames():
     assert np.isnan(native['pose'][~native['pose_valid']]).all()
 
 
+def test_finger_widths():
+    """
+    Fingers 1.7 mm off the camera axis: a one-tag width from the calibrated
+    midpoint equals the two-tag width; from the camera axis (UMI) it is off by 3.4 mm.
+    """
+    center, half = -0.0017, 0.04
+    both = {'tag_dict': {7: {'tvec': [center - half, 0, 0.079]}, 6: {'tvec': [center + half, 0, 0.079]}}}
+    left_only = {'tag_dict': {7: {'tvec': [center - half, 0, 0.079]}}}
+    right_only = {'tag_dict': {6: {'tvec': [center + half, 0, 0.079]}}}
+    misdetected = {'tag_dict': {7: {'tvec': [center - half, 0, 0.2]}}}      # depth outside 79 +- 8 mm
+    detections = [both, left_only, right_only, misdetected]
+    calibrated = {'min_width': 0.041, 'max_width': 0.127, 'finger_center_x': center}
+    w, n, c = finger_widths(detections, 7, 6, 0.079, calibrated)
+    assert np.allclose(w[:3], 2 * half - 0.041) and np.isnan(w[3])
+    assert list(n[:3]) == [2, 1, 1] and np.isclose(c[0], center) and np.all(np.isnan(c[1:]))
+    w_axis, _, _ = finger_widths(detections, 7, 6, 0.079, {'min_width': 0.041, 'max_width': 0.127})
+    assert np.isclose(w_axis[1] - w_axis[0], -2 * center) and np.isclose(w_axis[2] - w_axis[0], 2 * center)
+
+
 if __name__ == '__main__':
     test_align()
     test_values()
     test_episode_frames()
+    test_finger_widths()
     print("all passed")

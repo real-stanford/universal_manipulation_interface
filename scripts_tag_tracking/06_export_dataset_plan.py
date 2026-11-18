@@ -53,18 +53,13 @@ import pathlib
 import pickle
 import click
 import numpy as np
-from umi.common.exiftool_util import ExifTool
-from umi.common.cv_util import get_gripper_width
 from umi.common.pose_util import mat_to_pose
-from umi.common.interpolation_util import (
-    PoseInterpolator,
-    get_interp1d,
-    get_gripper_calibration_interpolator
-)
+from umi.common.interpolation_util import PoseInterpolator, get_interp1d
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
 from umi.tag_tracking.imu import load_cam_imu_calibration
+from umi.tag_tracking.delivery import load_gripper_range, finger_widths
 
 
 # %%
@@ -115,18 +110,6 @@ def bridged_gaps(times, is_valid, query_times):
     span = valid_times[idx] - valid_times[idx - 1] if len(valid_times) >= 2 else np.full(len(query_times), np.inf)
     period = np.median(np.diff(times)) if len(times) >= 2 else np.inf
     return span, span > 1.5 * period
-
-
-def load_gripper_width_interpolator(session, serial):
-    with ExifTool() as et:
-        for path in session.glob('demos/gripper_calibration*/gripper_range.json'):
-            meta = list(et.get_metadata(str(path.parent.joinpath('raw_video.mp4'))))[0]
-            if meta['QuickTime:CameraSerialNumber'] == serial:
-                data = json.load(path.open('r'))
-                return get_gripper_calibration_interpolator(
-                    aruco_measured_width=[data['min_width'], data['max_width']],
-                    aruco_actual_width=[data['min_width'], data['max_width']])
-    raise RuntimeError(f"no gripper_range.json for camera {serial}, run 05_run_calibrations.py")
 
 
 # %%
@@ -257,16 +240,17 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 is_valid.append(pose_valid)
 
                 gripper = hardware['grippers'][wrist['camera_serial']]
-                width_calibration = load_gripper_width_interpolator(session, wrist['camera_serial'])
+                gripper_range = load_gripper_range(session, wrist['camera_serial'])
                 detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
-                width_times = list()
-                widths = list()
-                for d in detections:
-                    width = get_gripper_width(d['tag_dict'], gripper['left_finger_tag_id'],
-                        gripper['right_finger_tag_id'], nominal_z=hardware['nominal_z'])
-                    if width is not None:
-                        width_times.append(wrist['start_timestamp'] + d['time'])
-                        widths.append(width_calibration(width))
+                # same widths as the delivery: one-tag widths from the calibrated finger midpoint
+                all_widths, _, _ = finger_widths(detections, gripper['left_finger_tag_id'],
+                    gripper['right_finger_tag_id'], hardware['nominal_z'], gripper_range)
+                measured = ~np.isnan(all_widths)
+                width_times = [wrist['start_timestamp'] + d['time'] for d, m in zip(detections, measured) if m]
+                widths = all_widths[measured].tolist()
+                if 'finger_center_x' not in gripper_range:
+                    print(f"{wrist['name']}: gripper_range.json has no finger_center_x (rerun gripper_range), "
+                        f"one-tag widths assume the camera axis")
                 print(f"{wrist['name']}: gripper width in {len(widths) / len(detections) * 100:.0f}% of frames"
                     + ('' if wrist['name'] in corrections or sync is None else '; no wrist sync correction, audio sync only'))
                 width_times = np.array(width_times)

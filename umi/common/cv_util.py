@@ -217,7 +217,36 @@ def draw_charuco_board(board, dpi=300, padding_mm=15):
     board_img = board.generateImage(outSize=board_size_pixel, marginSize=padding_pixel)
     return board_img
 
-def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=0.008):
+def finger_tag_x(tag_dict, tag_id, nominal_z=0.072, z_tolerance=0.008):
+    """
+    x (m, camera frame) of a finger tag, None if not detected or its depth is
+    not within nominal_z +- z_tolerance (misdetection).
+    """
+    if tag_id not in tag_dict:
+        return None
+    tvec = tag_dict[tag_id]['tvec']
+    if nominal_z - z_tolerance < tvec[-1] < nominal_z + z_tolerance:
+        return tvec[0]
+    return None
+
+
+def get_finger_center_x(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=0.008):
+    """
+    Midpoint (m, camera x) between the two finger tags, None unless both are detected.
+    """
+    left_x = finger_tag_x(tag_dict, left_id, nominal_z, z_tolerance)
+    right_x = finger_tag_x(tag_dict, right_id, nominal_z, z_tolerance)
+    if left_x is None or right_x is None:
+        return None
+    return 0.5 * (left_x + right_x)
+
+
+def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=0.008, center_x=0.0):
+    """
+    Distance (m, camera x) between the finger tags. With one tag detected, twice
+    its distance from the fingers' midpoint center_x: UMI assumes the camera
+    axis (0); the gripper range calibration measures it (finger_center_x).
+    """
     zmax = nominal_z + z_tolerance
     zmin = nominal_z - z_tolerance
 
@@ -238,9 +267,9 @@ def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=
     if (left_x is not None) and (right_x is not None):
         width = right_x - left_x
     elif left_x is not None:
-        width = abs(left_x) * 2
+        width = abs(left_x - center_x) * 2
     elif right_x is not None:
-        width = abs(right_x) * 2
+        width = abs(right_x - center_x) * 2
     return width
 
 
