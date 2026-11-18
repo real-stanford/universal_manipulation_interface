@@ -79,7 +79,8 @@ lower the confidence; do not guess an object or an outcome.
 is carried, e.g. while approaching.
 - outcome is "success" only if the frames show the goal reached; completed_at_s is then the time it was \
 reached (use the label time of the first frame showing it).
-- confidence and progress are numbers from 0 to 1."""
+- progress is how far the whole task is done at the end of the span, from 0 (not started) to 1 (done); \
+confidence is from 0 to 1."""
 
 
 def read_frames(video_path, times):
