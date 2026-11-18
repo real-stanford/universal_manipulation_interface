@@ -265,16 +265,18 @@ def between_bangs(interval: Tuple[float, float], bangs: Sequence[float]) -> Tupl
     """
     Remove the bang ritual from a task interval: bangs are made right after
     leaving the dock and right before returning (both grippers held up to the
-    head camera's microphone, where the cubes leave its view). A bang in the
-    first half of the interval moves the start to the last such bang, one in
-    the second half the end to the first such bang. Returns the interval and,
-    per side, 'bang' or 'dock' (no bang there: the dock boundary is kept).
+    head camera's microphone, where the cubes leave its view). The start moves
+    to the first bang (if it is in the first half of the interval), the end to
+    the last bang (if in the second half): first to last bang, as the bang
+    boundary of 00b, so bangs inside the task (a collision) do not cut it.
+    Returns the interval and, per side, 'bang' or 'dock' (no bang there: the
+    dock boundary is kept).
     """
     start, end = interval
     middle = 0.5 * (start + end)
     inside = [b for b in bangs if start <= b <= end]
     early = [b for b in inside if b < middle]
     late = [b for b in inside if b >= middle]
-    new_start = max(early) if early else start
-    new_end = min(late) if late else end
+    new_start = min(early) if early else start
+    new_end = max(late) if late else end
     return (new_start, new_end), ['bang' if early else 'dock', 'bang' if late else 'dock']
