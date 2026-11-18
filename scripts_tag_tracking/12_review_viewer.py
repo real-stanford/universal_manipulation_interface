@@ -44,7 +44,7 @@ from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.wrist_sync import wrist_corrections, head_readout, head_to_wrist_time
 from umi.tag_tracking.delivery import episode_frames, gripper_streams
-from umi.tag_tracking.annotation import gripper_events, measured_items
+from umi.tag_tracking.annotation import gripper_events, measured_items, bang_key_events
 from umi.tag_tracking.review import check_review, empty_review, OUTCOMES
 from umi.tag_tracking.delivery_config import load_delivery_config, COLLECTION_MODES, SCENES, SESSION_KEYS
 
@@ -195,7 +195,8 @@ class Session:
                 for s in spans.values()],
             'events': sorted([{'arm': x['arm'], 'kind': 'contact', 'measured_kind': x['kind'], 't_s': x['t'] - start,
                 'label': f"gripper {x['kind']}" + (' (holding)' if x.get('holding') else ''), 'outcome': None}
-                for x in events.values()], key=lambda x: x['t_s'])}
+                for x in events.values()], key=lambda x: x['t_s']),
+            'bangs': bang_key_events(self.episodes[head_name]['bangs'], start, end, e['task_start'], e['task_end'])}
         stem = self.stem(head_name, number)
         path = self.annotations.joinpath(stem + '.json')
         annotation = json.load(path.open('r')) if path.is_file() else None

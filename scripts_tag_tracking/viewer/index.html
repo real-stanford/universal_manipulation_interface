@@ -65,7 +65,7 @@
     </div>
     <canvas id="timeline" height="300"></canvas>
     <div class="small">Rows: task interval, spans per arm (grey reset, blue approach, orange hold, green retract),
-      key events, gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
+      key events (dashed: bangs), gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
   </div>
   <div id="right">
     <section><h2>Episode</h2><div class="kv" id="info"></div></section>
@@ -162,7 +162,10 @@ function togglePlay() { if (head) head.paused ? head.play() : head.pause(); }
 function stepBy(dt) { if (head) { head.pause(); seek(now() + dt); } }
 
 function spans() { return ep.annotation ? ep.annotation.events : ep.measured.spans; }
-function keyEvents() { return ep.annotation ? ep.annotation.key_events : ep.measured.events; }
+function keyEvents() {
+  if (ep.annotation && ep.annotation.key_events.some(k => k.measured_kind === 'bang')) return ep.annotation.key_events;
+  return [...(ep.annotation ? ep.annotation.key_events : ep.measured.events), ...ep.measured.bangs].sort((a, b) => a.t_s - b.t_s);
+}
 
 function drawTimeline() {
   const c = $('timeline'), dpr = window.devicePixelRatio || 1;
@@ -198,9 +201,17 @@ function drawTimeline() {
   // key events
   const yk = 38 + ep.arms.length * 26; label('events', yk + 6);
   for (const k of keyEvents()) {
+    if (k.measured_kind === 'bang') continue;
     g.fillStyle = k.kind === 'subgoal_complete' ? '#1a7f37' : (k.measured_kind || k.kind) === 'open' ? '#4a7fb5' : '#c25b2a';
     g.fillRect(x(k.t_s) - 1, yk, 3, 12);
   }
+  // bangs: dashed line across the span rows, labeled in the events row
+  g.save(); g.setLineDash([3, 3]); g.strokeStyle = '#222';
+  for (const b of ep.measured.bangs) {
+    g.beginPath(); g.moveTo(x(b.t_s), 18); g.lineTo(x(b.t_s), yk + 12); g.stroke();
+    g.fillStyle = '#222'; g.fillText('bang', x(b.t_s) + 3, yk + 6);
+  }
+  g.restore();
   // gripper opening and tracking
   ep.arms.forEach((arm, k) => {
     const y0 = yk + 22 + k * 64, hh = 46, s = ep.signals[arm];

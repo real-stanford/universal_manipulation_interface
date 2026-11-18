@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from umi.tag_tracking.annotation import (gripper_events, arm_spans, turning_points, frame_times_for_review,
     measured_items, response_schema, request_text, merge_annotation, label_inventory, vocabulary_schema,
-    vocabulary_maps, apply_vocabulary)
+    vocabulary_maps, apply_vocabulary, bang_key_events)
 
 FPS = 60000 / 1001
 
@@ -173,6 +173,22 @@ def test_vocabulary():
     assert c['task']['task'] == 'put the red cup on the saucer' and c['task']['objects'] == ['red cup', 'saucer']
 
 
+def test_bangs():
+    spans, events = merge_inputs()  # episode 10-30 s, task 12-25 s
+    b = bang_key_events([5.0, 11.0, 12.0, 18.0, 25.0, 29.0, 31.0], 10.0, 30.0, 12.0, 25.0)
+    assert [(x['t_s'], x['label'].split(':')[0]) for x in b] == [(1.0, 'bang before the task'), (2.0, 'bang before the task'),
+        (8.0, 'bang during the task'), (15.0, 'bang after the task'), (19.0, 'bang after the task')]
+    assert all(x['kind'] == 'phase' and x['arm'] == 'both' for x in b)
+    answer = {'task': {'task': 't', 'skill': 'pack', 'objects': [], 'success_predicate': '', 'outcome': 'failure',
+        'completed_at_s': 0.0, 'instruction_variants': [], 'confidence': 0.5}, 'spans': [], 'gripper_events': [],
+        'state_changes': [], 'recoveries': [], 'issues': [], 'objects': [], 'scene_graph': []}
+    out = merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [12.0, 25.0])
+    kinds = [(k['t_s'], k['kind']) for k in out['key_events']]
+    assert kinds == [(2.0, 'phase'), (4.0, 'contact'), (8.0, 'contact'), (15.0, 'phase')]
+    # end defaults to the last span's end: a bang at 30 s is outside
+    assert len(merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [30.0])['key_events']) == 2
+
+
 if __name__ == '__main__':
     test_turning_points()
     test_events()
@@ -180,4 +196,5 @@ if __name__ == '__main__':
     test_measured_items()
     test_schema_and_merge()
     test_vocabulary()
+    test_bangs()
     print("all passed")

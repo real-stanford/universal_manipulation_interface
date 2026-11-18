@@ -261,12 +261,34 @@ def request_text(start: float, end: float, task_start: float, task_end: float,
     return '\n'.join(lines)
 
 
+def bang_key_events(bangs: Sequence[float], start: float, end: float, task_start: float, task_end: float) -> List[dict]:
+    """
+    Key events (kind 'phase') of the bangs in [start, end) (head video
+    seconds, episodes.json): the grippers knocked together near the head
+    camera, found as a joint wrist IMU spike confirmed by the head audio
+    click. The ritual bangs bound the task (03t_trim_docking.py), a bang
+    inside the task is labeled as such. Times in seconds from the episode start.
+    """
+    eps = 1e-6
+    out = list()
+    for b in sorted(bangs):
+        if not start <= b < end:
+            continue
+        where = 'before the task' if b <= task_start + eps else 'after the task' if b >= task_end - eps else 'during the task'
+        out.append({'t_s': b - start, 'label': f"bang {where}: grippers knocked together", 'kind': 'phase',
+            'outcome': None, 'note': 'measured: joint wrist IMU spike confirmed by the head audio click',
+            'arm': 'both', 'measured_kind': 'bang'})
+    return out
+
+
 def merge_annotation(answer: dict, start: float, task_start: float, task_end: float,
-        spans: Dict[str, dict], events: Dict[str, dict]) -> dict:
+        spans: Dict[str, dict], events: Dict[str, dict], bangs: Sequence[float] = (), end: Optional[float] = None) -> dict:
     """
     Spec 2.7 layers from the model's answer and the measured items: times and
     arms always the measured ones, words from the model. Spans the model did
-    not name keep empty words; reset spans are labeled 'reset' (idle).
+    not name keep empty words; reset spans are labeled 'reset' (idle). Bangs
+    (head video seconds) in the episode become 'phase' key events
+    (bang_key_events; end defaults to the end of the last span).
     Times in seconds from the episode start.
     """
     named = {s['span_id']: s for s in answer['spans']}
@@ -295,6 +317,9 @@ def merge_annotation(answer: dict, start: float, task_start: float, task_end: fl
     if completed is not None:
         key_events.append({'t_s': completed, 'label': 'task complete', 'kind': 'subgoal_complete',
             'outcome': 'success', 'note': task['success_predicate']})
+    if end is None:
+        end = max((s['end'] for s in spans.values()), default=task_end)
+    key_events += bang_key_events(bangs, start, end, task_start, task_end)
     key_events.sort(key=lambda x: x['t_s'])
     return {
         'tasks': [{

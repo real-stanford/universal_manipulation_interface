@@ -181,6 +181,7 @@ def main(input, config, output, episodes, task_prompt, model, effort, max_frames
             # measured
             arm_events = {g['side']: gripper_events(g['width_times'], g['widths'], e['start'], e['end']) for g in grippers}
             spans, events = measured_items(e['start'], e['end'], e['task_start'], e['task_end'], arm_events)
+            bangs = [float(b) for b in episodes_json[head['name']]['bangs'] if e['start'] <= b < e['end']]
 
             # frames: head at the task start / end and every event, each wrist at its events
             picks = frame_times_for_review(e['task_start'], e['task_end'], arm_events, max_frames)
@@ -249,11 +250,11 @@ def main(input, config, output, episodes, task_prompt, model, effort, max_frames
                 'annotation_model': response.model,
                 'prompt_mode': 'given' if task_prompt else 'inferred',
                 'given_prompt': task_prompt,
-                **merge_annotation(answer, e['start'], e['task_start'], e['task_end'], spans, events),
+                **merge_annotation(answer, e['start'], e['task_start'], e['task_end'], spans, events, bangs, e['end']),
                 'frames_seen': labels,
                 # inputs of merge_annotation, to rebuild the layers after 09_normalize_labels.py
                 'measured': {'start': e['start'], 'task_start': e['task_start'], 'task_end': e['task_end'],
-                    'spans': spans, 'events': events},
+                    'spans': spans, 'events': events, 'end': e['end'], 'bangs': bangs},
                 'model_answer': answer,
                 'created_ts_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }

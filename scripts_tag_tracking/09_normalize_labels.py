@@ -143,7 +143,7 @@ def main(sessions, vocabulary, model, effort, apply_only, dry_run):
     for p, a in zip(files, annotations):
         m = a['measured']
         a.update(merge_annotation(apply_vocabulary(a['model_answer'], maps), m['start'], m['task_start'],
-            m['task_end'], m['spans'], m['events']))
+            m['task_end'], m['spans'], m['events'], m.get('bangs', ()), m.get('end')))
         a['label_normalization'] = {'vocabulary': str(vocabulary_path), 'model': vocab.get('model'),
             'applied_from_file': apply_only}
         json.dump(a, p.open('w'), indent=2)
