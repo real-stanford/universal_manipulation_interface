@@ -111,10 +111,11 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
                     if f is not None:
                         readout_samples.append((wrist['name'], 0.5 * (e['start'] + e['end']), f['correction'], f['row']))
                 if line is None:
-                    print(f"  {name} {wrist['name']}: fewer than 3 episodes synchronized, no correction")
+                    print(f"  {name} {wrist['name']}: no episode synchronized, no correction")
                     continue
                 print(f"  {name} {wrist['name']}: correction {line['offset_ms']:+.2f} ms {line['drift_ms_per_min']:+.3f} ms/min "
-                    f"from {line['n_inliers']} of {line['n_episodes']} episodes, residual RMS {line['residual_ms']:.2f} ms")
+                    f"from {line['n_inliers']} of {line['n_episodes']} episodes, residual RMS {line['residual_ms']:.2f} ms"
+                    + (" (constant: fewer than 3 episodes, no drift fitted)" if line.get('constant') else ''))
                 print('    per episode (ms, sigma): ' + ', '.join(f"{x['correction_ms']:+.1f}({x['sigma_ms']:.1f})"
                     + ('' if x['inlier'] else '*') for x in line['episodes']))
 

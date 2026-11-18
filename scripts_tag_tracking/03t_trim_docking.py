@@ -20,8 +20,9 @@ to every episode of tag_tracking/episodes.json;
 06_export_dataset_plan.py exports that interval.
 
 With episodes.fixed_trim_sec in the config (e.g. one episode per video,
-episodes.boundary: video), the task is simply the episode minus that many
-seconds at each end ('task_boundary' 'fixed'), no dock or bang detection.
+episodes.boundary: video), the task is simply the part of the episode that
+the head and every wrist camera recorded, minus that many seconds at each end
+('task_boundary' 'fixed'), no dock or bang detection.
 
 python scripts_tag_tracking/03t_trim_docking.py -i data_workspace/session -c umi_calib/tag_tracking.yaml
 """
@@ -40,7 +41,7 @@ import pickle
 import click
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
-from umi.tag_tracking.session import get_session_videos
+from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.episodes import task_interval, between_bangs
 
 
@@ -76,8 +77,12 @@ def main(input, config, bang_ritual):
     episodes_path = session.joinpath('tag_tracking', 'episodes.json')
     data = json.load(episodes_path.open('r'))
 
-    for head in [x for x in get_session_videos(session) if x['camera_serial'] == config['head_camera']]:
+    videos = get_session_videos(session)
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
+        # head video time spans recorded by each gripper's wrist camera(s)
+        wrist_spans = [[(w['start_timestamp'] - head['start_timestamp'], w['end_timestamp'] - head['start_timestamp'])
+            for w in overlapping(videos, head, config['bodies'][name]['gripper_camera'])] for name in names]
         times = track['time']
         positions = list()
         for name in names:
@@ -89,7 +94,15 @@ def main(input, config, bang_ritual):
         durations = list()
         for k, e in enumerate(video['episodes']):
             if fixed_trim is not None:
-                interval = (e['start'] + fixed_trim, e['end'] - fixed_trim)
+                # recorded by every camera: the head episode and, per gripper, its wrist video covering most of it
+                lo, hi = e['start'], e['end']
+                for spans in wrist_spans:
+                    if not spans:
+                        lo, hi = 0.0, -1.0
+                        break
+                    s0, s1 = max(spans, key=lambda s: min(s[1], hi) - max(s[0], lo))
+                    lo, hi = max(lo, s0), min(hi, s1)
+                interval = (lo + fixed_trim, hi - fixed_trim)
                 interval = interval if interval[1] > interval[0] else None
                 sources = ['fixed', 'fixed']
             else:
@@ -101,7 +114,8 @@ def main(input, config, bang_ritual):
             e['task_boundary'] = None if interval is None else sources
             if interval is None:
                 print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: "
-                    + ("shorter than twice the fixed trim, no task" if fixed_trim is not None else "cubes never left the dock area, no task"))
+                    + ("recorded by all cameras for less than twice the fixed trim, no task" if fixed_trim is not None
+                        else "cubes never left the dock area, no task"))
                 continue
             durations.append(interval[1] - interval[0])
             e['task_removed'] = [interval[0] - e['start'], e['end'] - interval[1]]

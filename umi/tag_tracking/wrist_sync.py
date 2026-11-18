@@ -151,21 +151,29 @@ def sync_episodes(times: np.ndarray, obs_times: np.ndarray, rows: np.ndarray, T_
 def drift_line(episode_fits: Sequence[Tuple[dict, Optional[dict]]]) -> Optional[dict]:
     """
     Robust line correction(t) = offset + drift * t (head video seconds) through
-    the episodes' corrections. None with fewer than 3 fitted episodes.
+    the episodes' corrections. With 1 or 2 fitted episodes (a short video, e.g.
+    one episode per video) a constant correction, their median (drift over a
+    minute or two ~0.3 ms, below the fit's own spread); None without any.
     """
     fits = [(e, f) for e, f in episode_fits if f is not None]
-    if len(fits) < 3:
+    if len(fits) == 0:
         return None
     t = np.array([0.5 * (e['start'] + e['end']) for e, _ in fits])
     c = np.array([f['correction'] for _, f in fits])
-    a, b, inlier = robust_drift_line(t, c, np.ones(len(t), dtype=bool))
+    if len(fits) < 3:
+        a, b, inlier = float(np.median(c)), 0.0, np.ones(len(t), dtype=bool)
+    else:
+        a, b, inlier = robust_drift_line(t, c, np.ones(len(t), dtype=bool))
     residual = c - (a + b * t)
     return {
         'offset_ms': float(a * 1e3),
         'drift_ms_per_min': float(b * 60e3),
-        'residual_ms': float(np.sqrt(np.mean(residual[inlier] ** 2)) * 1e3),
+        # constant: at least the episodes' own fit uncertainty (one episode has no residual)
+        'residual_ms': float(max(np.sqrt(np.mean(residual[inlier] ** 2)),
+            np.median([f['sigma'] for _, f in fits]) if len(fits) < 3 else 0.0) * 1e3),
         'n_episodes': int(len(t)),
         'n_inliers': int(inlier.sum()),
+        'constant': bool(len(fits) < 3),
         'mean_row': float(np.mean([f['row'] for _, f in fits])),
         'episodes': [{'start': float(e['start']), 'end': float(e['end']), 'correction_ms': f['correction'] * 1e3,
             'sigma_ms': f['sigma'] * 1e3, 'rate_rms': f['rms'], 'motion_rms': f['motion_rms'],
