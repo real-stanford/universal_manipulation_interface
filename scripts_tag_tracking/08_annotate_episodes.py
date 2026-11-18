@@ -75,6 +75,8 @@ lower the confidence; do not guess an object or an outcome.
 - Verbs are short phrases naming the object and destination: "grasp blue screwdriver", \
 "carry cup to saucer", "release screwdriver into tray".
 - Use the same object names everywhere in the answer.
+- destination is where the object ends up or goes (a place or another object); leave it empty when nothing \
+is carried, e.g. while approaching.
 - outcome is "success" only if the frames show the goal reached; completed_at_s is then the time it was \
 reached (use the label time of the first frame showing it).
 - confidence and progress are numbers from 0 to 1."""

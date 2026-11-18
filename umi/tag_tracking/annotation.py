@@ -153,7 +153,7 @@ def frame_times_for_review(task_start: float, task_end: float, events: Dict[str,
             if task_start < e['t'] < task_end:
                 picks.append((e['t'], f"{arm} gripper {e['kind']}"
                     + (" (fingers stop open: holding)" if e.get('holding') else
-                       " (fingers fully closed)" if e['kind'] == 'close' else '')))
+                       " (fingers nearly closed: empty or a thin object)" if e['kind'] == 'close' else '')))
     picks = sorted(picks)
     if len(picks) > max_frames:
         # keep start, end and evenly spread events
@@ -248,7 +248,8 @@ def request_text(start: float, end: float, task_start: float, task_end: float,
     for i, e in events.items():
         note = ''
         if e['kind'] == 'close':
-            note = ' (stopped while open: something between the fingers)' if e['holding'] else ' (fully closed: nothing between the fingers)'
+            note = (' (stopped while open: something between the fingers)' if e['holding'] else
+                f" (closed to under {DEFAULTS['holding_width'] * 1000:.0f} mm: empty, or a thin object such as a sheet or an edge)")
         lines.append(f"  {i}: {e['arm']}, {e['t'] - start:.2f}, {e['width'] * 1000:.0f} mm{note}")
     if not events:
         lines.append("  none")
