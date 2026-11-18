@@ -9,6 +9,10 @@ file per episode (JSON schemas umi.msg.* and foxglove.*), viewable in Foxglove:
   robot{i}/imu                    umi.msg.ImuSample     wrist GoPro IMU, raw GPMF axes, all samples
   /cameras/camera{j}/video        foxglove.CompressedVideo  H.265, the GoPro's own stream
   metadata 'recording'            episode, robot, camera and frame information
+  metadata 'camera{j}'             (with -c) role, serial, model, lens, field of view, resolution,
+                                   frame rate, fisheye intrinsics and their calibration
+  metadata 'sync'                  (with -c) sync method, accuracy, per camera the video frame
+                                   index of the episode's first step (the same instant in all files)
 
 Robots in robot_index order (UMI: 0 right, 1 left); cameras as in the plan:
 wrist cameras in robot order, then the head camera.
@@ -20,7 +24,7 @@ delimiter), as Foxglove CompressedVideo requires. Each camera's video starts
 at the keyframe before the episode (GoPro: one keyframe per second), so the
 first video messages can precede the first pose message by up to 1 s.
 
-python scripts_tag_tracking/07_export_mcap.py -i data_workspace/session --episodes 0,1,2
+python scripts_tag_tracking/07_export_mcap.py -i data_workspace/session -c umi_calib/tag_tracking.yaml --episodes 0,1,2
 """
 # %%
 import sys
@@ -42,6 +46,13 @@ import av
 import numpy as np
 from mcap.writer import Writer, CompressionType
 from umi.tag_tracking.imu import load_imu
+from umi.tag_tracking.config import load_tag_tracking_config
+from umi.tag_tracking.camera_metadata import camera_record
+from umi.common.exiftool_util import ExifTool
+
+SYNC_METHOD = ("start offsets from the cameras' audio tracks (cross-correlation, 06a_estimate_audio_sync.py); "
+    "wrist cameras refined by motion: wrist gyro against the head-tracked cube rotation per episode "
+    "(03s_sync_wrists.py); IMU samples timed from the GoPro GPMF timestamps")
 
 PROFILE = 'umi'
 LIBRARY = 'umi tag tracking'
@@ -144,7 +155,8 @@ def frame0_time(camera: dict, times: np.ndarray, dt: float) -> float:
     return float(times[0] - camera['video_start_end'][0] * dt)
 
 
-def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video_fps, tcps_in_camera):
+def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video_fps, tcps_in_camera,
+        camera_records=None, sync_record=None):
     times = np.asarray(plan_episode['episode_timestamps'], dtype=np.float64)
     dt = float(np.median(np.diff(times))) if len(times) > 1 else 1 / video_fps
     cameras = plan_episode['cameras']
@@ -219,7 +231,19 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
                 else {f'robot{g}_tcp_in_camera_m': ','.join(f'{x:g}' for x in t) for g, t in enumerate(tcps_in_camera)}),
             'rotation': 'axis_angle',
             'units': 'm,rad',
+            'gripper_width': 'robot{i}/gripper/state per step: finger tag distance relative to fully closed (m), '
+                'from the wrist camera; range from each gripper\'s calibration video',
         })
+        for c, record in enumerate(camera_records or []):
+            writer.add_metadata(f'camera{c}', record)
+        if sync_record is not None:
+            writer.add_metadata('sync', {
+                **sync_record,
+                **{f'camera{c}_frame_at_episode_start': str(int(camera['video_start_end'][0]))
+                    for c, camera in enumerate(cameras)},
+                **{f'camera{c}_clock_correction_ms': f"{camera.get('clock_correction_ms') or 0.0:.3f}"
+                    for c, camera in enumerate(cameras)},
+            })
         writer.finish()
     return path
 
@@ -247,8 +271,10 @@ def verify(path) -> str:
 @click.option('-i', '--input', required=True, help='Session directory with dataset_plan.pkl')
 @click.option('-o', '--output', default=None, help='Output directory, default <session>/dataset_mcap')
 @click.option('-e', '--episodes', default=None, help='Comma separated episode indices of the plan, default all')
+@click.option('-c', '--config', default=None,
+    help='Tag tracking config: adds the camera (model, lens, intrinsics) and sync metadata records')
 @click.option('-j', '--num_workers', type=int, default=None, help='Episodes written in parallel, default all cores')
-def main(input, output, episodes, num_workers):
+def main(input, output, episodes, config, num_workers):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     output = session.joinpath('dataset_mcap') if output is None else pathlib.Path(os.path.expanduser(output)).absolute()
     output.mkdir(parents=True, exist_ok=True)
@@ -266,12 +292,41 @@ def main(input, output, episodes, num_workers):
     print(f"TCP in the wrist camera frame per robot: {tcps_in_camera} m")
     world_tag = [b['anchor_tag'] for b in bodies.values() if b['static']][0]
     print(f"{len(plan)} episodes in the plan, writing {len(indices)} to {output}")
+    # camera and sync metadata (camera order of the plan: wrist cameras in robot order, then the head)
+    camera_records, sync_records = {k: None for k in indices}, {k: None for k in indices}
+    if config is not None:
+        config = load_tag_tracking_config(config)
+        sync_path = session.joinpath('tag_tracking', 'wrist_sync.json')
+        sync = json.load(sync_path.open('r')) if sync_path.is_file() else {'videos': {}}
+        with ExifTool() as et:
+            exif = {str(p): list(et.get_metadata(str(demos_dir.joinpath(p))))[0]
+                for p in {c['video_path'] for k in indices for c in plan[k]['cameras']}}
+        for k in indices:
+            cameras = plan[k]['cameras']
+            n_grippers = len(plan[k]['grippers'])
+            records = list()
+            for c, camera in enumerate(cameras):
+                info = exif[camera['video_path']]
+                serial = info['QuickTime:CameraSerialNumber']
+                role = f"{ROBOT_SIDES[c]}_wrist" if c < n_grippers else 'head'
+                records.append(camera_record(role, serial, info, video_fps, config['cameras'][serial]))
+            camera_records[k] = records
+            head = pathlib.Path(cameras[-1]['video_path']).parent.name
+            accuracy = [x.get('accuracy_ms') for name, x in sync['videos'].get(head, dict()).items()
+                if name in {pathlib.Path(c['video_path']).parent.name for c in cameras[:n_grippers]}]
+            sync_records[k] = {
+                'method': SYNC_METHOD,
+                'wrist_motion_sync': 'applied' if any(c.get('clock_correction_ms') for c in cameras[:n_grippers])
+                    else 'not applied (audio sync only)',
+                'accuracy_ms': ', '.join('-' if a is None else f'{a:.2f}' for a in accuracy) if accuracy else 'not measured',
+                'frame_rate_hz': f'{video_fps:.5f} (all cameras)',
+            }
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_workers, len(indices)),
             mp_context=multiprocessing.get_context('spawn')) as executor:
         futures = {executor.submit(write_episode, str(output.joinpath(f'episode_{k:06d}.mcap')), k, plan[k],
-            demos_dir, world_tag, video_fps, tcps_in_camera): k for k in indices}
+            demos_dir, world_tag, video_fps, tcps_in_camera, camera_records[k], sync_records[k]): k for k in indices}
         for future in concurrent.futures.as_completed(futures):
             path = future.result()
             print(f"{pathlib.Path(path).name}: {os.path.getsize(path) / 1e6:.0f} MB, {verify(path)}")
