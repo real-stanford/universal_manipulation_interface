@@ -13,13 +13,15 @@
   main { display: grid; grid-template-columns: minmax(0, 1fr) 440px; height: calc(100vh - 45px); }
   #left { padding: 10px; overflow: auto; }
   #right { border-left: 1px solid var(--line); background: #fff; overflow: auto; }
-  .videos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .videos figure { margin: 0; position: relative; background: #000; }
-  .videos figure.head { grid-column: 1 / 3; }
-  .videos video { width: 100%; display: block; }
+  /* head on the left, the two wrists stacked on the right; all 4:3, at most ~44% of the screen height */
+  .videos { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: auto auto; gap: 4px; max-width: min(100%, 88vh); }
+  .videos figure { margin: 0; position: relative; background: #000; aspect-ratio: 4 / 3; }
+  .videos figure.head { grid-row: 1 / 3; aspect-ratio: auto; }
+  .videos video { width: 100%; height: 100%; object-fit: contain; display: block; }
   .videos figcaption { position: absolute; left: 6px; top: 4px; color: #fff; font-size: 12px; text-shadow: 0 0 3px #000; }
   .videos .missing { color: #aaa; padding: 40px; text-align: center; }
   .controls { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+  header select, .controls select { width: auto; }
   .controls .time { font-variant-numeric: tabular-nums; min-width: 150px; }
   canvas { width: 100%; display: block; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
   section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
@@ -63,7 +65,7 @@
       <span class="time" id="time"></span>
       <span class="small" id="status"></span>
     </div>
-    <canvas id="timeline" height="300"></canvas>
+    <canvas id="timeline"></canvas>
     <div class="small">Rows: task interval, spans per arm (grey reset, blue approach, orange hold, green retract),
       key events (dashed: bangs), gripper opening per arm (mm) with lost-tracking frames in red. Click to seek.</div>
   </div>
@@ -169,8 +171,8 @@ function keyEvents() {
 
 function drawTimeline() {
   const c = $('timeline'), dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth, h = 300;
-  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const w = c.clientWidth, h = 38 + ep.arms.length * 26 + 22 + ep.arms.length * 64 + 4;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; c.style.height = h + 'px'; }
   const g = c.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
