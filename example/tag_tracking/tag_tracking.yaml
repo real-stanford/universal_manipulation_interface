@@ -10,15 +10,22 @@ setup_calibration: setup_20261116
 head_imu:
   cam_imu_calibration: openicc/head/cam_imu/cam_imu_calib_result_GX010298.json
   noise_setting: head_gopro12_wide_fisheye_setting_720.yaml
+  # IMU -> video time from the GoPro timestamps (GPMF STMP, per video). OpenICC's
+  # time_offset (-12.8 ms) assumed a 16.68 ms readout (line delay never estimated)
+  # and its own frame time; for the first-row frame times here the GoPro
+  # timestamps (-22.5 ms) agree with the head camera (check_frame_table.py, task1)
+  imu_time_offset: gpmf
 # per wrist camera: OpenICC camera-IMU calibration and IMU noise (its ORB_SLAM3 setting),
 # for scripts_tag_tracking/03c_fuse_gripper_imu.py
 gripper_imu:
   C3501326029433:   # right gripper (OpenICC gripper2)
     cam_imu_calibration: openicc/gripper2/cam_imu/cam_imu_calib_result_GX019230.json
     noise_setting: gopro12_wide_fisheye_setting_720_C3501326029433.yaml
+    imu_time_offset: gpmf
   C3501326502891:   # left gripper (OpenICC gripper1)
     cam_imu_calibration: openicc/gripper1/cam_imu/cam_imu_calib_result_GX019255.json
     noise_setting: gopro12_wide_fisheye_setting_720.yaml
+    imu_time_offset: gpmf
 # pose accepted if its uncertainty is within this accuracy
 # default: UMI SLAM tracking accuracy (Chi et al. 2024, Sec. VII)
 accuracy:

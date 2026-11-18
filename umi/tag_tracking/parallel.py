@@ -106,16 +106,16 @@ def parallel_calibrate_bodies(camera: FisheyeCamera, body_frames: Dict[str, List
 
 
 def _fuse_window(camera_json, frames, T_world_tags, tag_sizes, noise_model_dict, imu, T_imu_cam,
-        time_offset, imu_noise, T_world_cam_init, pose_measurements=None):
+        time_offset, imu_noise, T_world_cam_init, pose_measurements=None, line_delay=0.0, reference_row=0.0):
     from umi.tag_tracking.visual_inertial import fuse_camera_trajectory
     return fuse_camera_trajectory(FisheyeCamera(camera_json), frames, T_world_tags, tag_sizes,
         TagNoiseModel.from_dict(noise_model_dict), imu, T_imu_cam, time_offset, imu_noise, T_world_cam_init,
-        pose_measurements=pose_measurements)
+        pose_measurements=pose_measurements, line_delay=line_delay, reference_row=reference_row)
 
 
 def submit_fuse(executor, camera: FisheyeCamera, frames: List[dict], T_world_tags, tag_sizes,
         noise_model: TagNoiseModel, imu: dict, T_imu_cam, time_offset: float, imu_noise: dict, T_world_cam_init,
-        pose_measurements=None):
+        pose_measurements=None, line_delay: float = 0.0, reference_row: float = 0.0):
     """
     Visual-inertial smoothing (umi.tag_tracking.visual_inertial.fuse_camera_trajectory)
     of one window of frames in a worker process; returns the future.
@@ -125,4 +125,5 @@ def submit_fuse(executor, camera: FisheyeCamera, frames: List[dict], T_world_tag
     lo, hi = np.searchsorted(imu['time'], [t0, t1])
     imu = {k: v[lo:hi] for k, v in imu.items()}
     return executor.submit(_fuse_window, camera.intrinsics_json, frames, T_world_tags, tag_sizes,
-        noise_model.to_dict(), imu, T_imu_cam, time_offset, imu_noise, T_world_cam_init, pose_measurements)
+        noise_model.to_dict(), imu, T_imu_cam, time_offset, imu_noise, T_world_cam_init, pose_measurements,
+        line_delay, reference_row)

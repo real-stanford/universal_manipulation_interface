@@ -10,6 +10,7 @@ setup_calibration: setup_20261116      # optional, bodies.json + gripper_tcp.jso
 head_imu:                             # optional, for 03b_fuse_head_imu.py
   cam_imu_calibration: cam_imu_calib_result.json   # OpenICC result of the head camera
   noise_setting: head_setting.yaml    # ORB_SLAM3 setting yaml with IMU.Noise*/IMU.*Walk
+  imu_time_offset: gpmf               # optional: openicc (calibration, default), gpmf (GoPro timestamps) or seconds
 gripper_imu:                          # optional, per wrist camera, for 03c_fuse_gripper_imu.py
   C3501326029433:
     cam_imu_calibration: right_cam_imu_calib_result.json
@@ -92,7 +93,11 @@ def load_tag_tracking_config(path: str) -> dict:
     assert robot_indices == list(range(len(robot_indices))), "robot_index must be 0..n-1"
 
     if 'head_imu' in config:
-        config['head_imu'] = {k: resolve(v) for k, v in config['head_imu'].items()}
+        config['head_imu'] = {k: (resolve(v) if k in ('cam_imu_calibration', 'noise_setting') else v)
+            for k, v in config['head_imu'].items()}
+        mode = config['head_imu'].get('imu_time_offset', 'openicc')
+        assert mode in ('openicc', 'gpmf') or isinstance(mode, (int, float)), \
+            "head_imu imu_time_offset must be openicc, gpmf or seconds"
 
     if 'gripper_imu' in config:
         config['gripper_imu'] = {str(serial): {k: (resolve(v) if k in ('cam_imu_calibration', 'noise_setting') else v)

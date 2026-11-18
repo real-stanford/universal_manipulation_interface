@@ -32,6 +32,7 @@ from umi.tag_tracking.factors import make_tag_factor, get_corner_noise_model, ta
 from umi.tag_tracking.rigid_body import get_observations
 from umi.tag_tracking.uncertainty import pose_std
 from umi.tag_tracking.initialization import chi2_threshold
+from umi.tag_tracking.rolling_shutter import relative_twists, corner_motions
 
 X = lambda k: gtsam.symbol('x', k)
 V = lambda k: gtsam.symbol('v', k)
@@ -146,8 +147,14 @@ def fuse_camera_trajectory(camera: FisheyeCamera, frames: list,
         imu_time_offset: float, imu_noise: Dict[str, float],
         T_world_cam_init: np.ndarray, compute_covariance: bool = True,
         feature_tracks: Optional[Dict[str, np.ndarray]] = None,
-        pose_measurements: Optional[Dict[int, Tuple[np.ndarray, np.ndarray]]] = None) -> Dict[str, np.ndarray]:
+        pose_measurements: Optional[Dict[int, Tuple[np.ndarray, np.ndarray]]] = None,
+        line_delay: float = 0.0, reference_row: float = 0.0) -> Dict[str, np.ndarray]:
     """
+    line_delay (s per image row): rolling shutter of the camera; a tag corner in
+        row v is observed at frame time + (v - reference_row) * line_delay, the
+        camera moving with its velocity at the frame (from the neighboring frames
+        of T_world_cam_init). reference_row: the row read at the frame's time
+        (0: frame times at the first row; image height / 2: at the middle row).
     pose_measurements: frame index -> (T_world_cam, 6x6 covariance in GTSAM
         Pose3 local coordinates [rotation, translation], right perturbation)
     frames: per frame dict with 'time' (camera clock, sec) and 'corners'
@@ -168,6 +175,13 @@ def fuse_camera_trajectory(camera: FisheyeCamera, frames: list,
     times = all_times[used]
     E = gtsam.Pose3(T_imu_cam)
     observations = get_observations(camera, frames, set(T_world_tags), tag_sizes, noise_model)
+    # rolling shutter: per observation, the camera's motion from the frame time to each corner's time
+    motions = [dict() for _ in range(n)]
+    if line_delay != 0:
+        twists = relative_twists(T_world_cam_init, times)
+        for k, obs in enumerate(observations):
+            for tag_id, o in obs.items():
+                motions[k][tag_id] = corner_motions(twists[k], (o['corners'][:, 1] - reference_row) * line_delay)
 
     params = gtsam.PreintegrationCombinedParams.MakeSharedU(STANDARD_GRAVITY)
     params.setGyroscopeCovariance(imu_noise['NoiseGyro'] ** 2 * np.eye(3))
@@ -203,7 +217,7 @@ def fuse_camera_trajectory(camera: FisheyeCamera, frames: list,
             # camera pose in nav frame = X_k * T_imu_cam, tags given in world: nav <- world via G
             graph.add(make_tag_factor(X(k), G, gtsam.Pose3(T_world_tags[tag_id]),
                 get_tag_object_points(tag_sizes[tag_id]), o['corners'], camera.calibration,
-                get_corner_noise_model(o['sigma']), camera_offset=E))
+                get_corner_noise_model(o['sigma']), camera_offset=E, camera_motions=motions[k].get(tag_id)))
             n_tag_factors += 1
     n_pose_factors = 0
     if pose_measurements is not None:
@@ -284,7 +298,8 @@ def fuse_camera_trajectory(camera: FisheyeCamera, frames: list,
         T_nav_cam = result.atPose3(X(k)).compose(E)
         for tag_id, o in obs.items():
             r = tag_corner_residual(T_nav_cam, T_nav_world, gtsam.Pose3(T_world_tags[tag_id]),
-                get_tag_object_points(tag_sizes[tag_id]), o['corners'], camera.calibration)
+                get_tag_object_points(tag_sizes[tag_id]), o['corners'], camera.calibration,
+                camera_motions=motions[k].get(tag_id))
             chi2.append(np.sum(np.square(r)) / o['sigma'] ** 2)
     # no tag observations (e.g. pose measurements only): no tag fit to scale by
     variance_factor = float(np.median(chi2) / scipy.stats.chi2.median(8)) if len(chi2) > 0 else 1.0

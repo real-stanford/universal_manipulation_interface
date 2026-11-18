@@ -27,7 +27,8 @@ import click
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.noise_model import TagNoiseModel
-from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise
+from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise, wrist_imu_time_offset
+from umi.tag_tracking.wrist_sync import head_readout
 from umi.tag_tracking.parallel import make_executor, submit_fuse
 from umi.tag_tracking.windows import window_frames, scatter, split_window
 from umi.tag_tracking.uncertainty import compose_covariance, pose_std
@@ -59,7 +60,18 @@ def main(input, config, num_workers, chunk_sec, context_sec):
         video_dir = track_path.parent
         track = pickle.load(track_path.open('rb'))
         corners = pickle.load(video_dir.joinpath('tag_corners.pkl').open('rb'))
-        frames = [{'time': x['time'], 'corners': x['corners']} for x in corners]
+        # rolling shutter as the tracking (bodies.json line delay): a pose refers to the middle row,
+        # read readout / 2 after the frame time; IMU time offset per the config (openicc / gpmf / s)
+        video = {'dir': video_dir, 'name': video_dir.name}
+        readout = head_readout(video)
+        height = camera.image_size[1]
+        frames = [{'time': x['time'] + 0.5 * calibration['line_delay'] * height, 'corners': x['corners']}
+            for x in corners]
+        time_offset = wrist_imu_time_offset(config['head_imu'], cam_imu, str(video_dir.joinpath('raw_video.mp4')),
+            float(np.median(np.diff([x['time'] for x in corners]))))
+        print(f"{video_dir.name}: IMU time offset {time_offset * 1e3:+.2f} ms "
+            f"({config['head_imu'].get('imu_time_offset', 'openicc')}), readout {readout * 1e3:.1f} ms, "
+            f"tracking line delay {calibration['line_delay'] * 1e6:.3f} us")
         imu = load_imu(str(video_dir.joinpath('imu_data.json')))
         # per-frame tag poses of 03_track_bodies.py, also when rerun
         tags_only = track.get('head_tags_only', track['head'])
@@ -74,7 +86,8 @@ def main(input, config, num_workers, chunk_sec, context_sec):
         for k in order:
             lo, hi, _, _ = chunks[k]
             futures[k] = submit_fuse(executor, camera, frames[lo:hi], T_world_tags, config['tag_sizes'],
-                noise_model, imu, cam_imu['T_imu_cam'], cam_imu['time_offset'], imu_noise, tags_only['T_world_cam'][lo:hi])
+                noise_model, imu, cam_imu['T_imu_cam'], time_offset, imu_noise, tags_only['T_world_cam'][lo:hi],
+                line_delay=calibration['line_delay'], reference_row=0.5 * height)
         per_frame = ['T_world_cam', 'covariance', 'position_std', 'rotation_std', 'n_tags', 'gyro_bias', 'accel_bias']
         parts = list()
         for k, (lo, hi, keep_lo, keep_hi) in enumerate(chunks):

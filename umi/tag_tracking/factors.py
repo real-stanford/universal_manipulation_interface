@@ -28,12 +28,15 @@ def tag_corner_residual(
         measured: np.ndarray,
         calibration: gtsam.Cal3Fisheye,
         compute_jacobians: bool = False,
-        corner_motions: Optional[List[gtsam.Pose3]] = None):
+        corner_motions: Optional[List[gtsam.Pose3]] = None,
+        camera_motions: Optional[List[gtsam.Pose3]] = None):
     """
     Reprojection residual of 4 tag corners observed by a camera:
-    pixel = project(T_ref_cam^-1 * T_ref_body * E_c * T_body_tag * corner)
+    pixel = project((T_ref_cam * C_c)^-1 * T_ref_body * E_c * T_body_tag * corner)
     E_c: known body motion from frame time to the corner's observation time
     (rolling shutter, see umi.tag_tracking.rolling_shutter), identity if None.
+    C_c: the same for a moving camera (its own motion, e.g. a camera moving
+    through a static tag map), identity if None.
 
     Returns:
         residual: (8,) predicted minus measured pixels
@@ -57,7 +60,12 @@ def tag_corner_residual(
             H_compose = np.zeros((6, 6), order='F')
             T_ref_body_c = T_ref_body.compose(corner_motions[i], H_compose, np.zeros((6, 6), order='F'))
         point_ref = T_ref_body_c.transformFrom(point_body, H_body, H_pbody)
-        point_cam = T_ref_cam.transformTo(point_ref, H_cam, H_pref)
+        H_compose_cam = np.eye(6)
+        T_ref_cam_c = T_ref_cam
+        if camera_motions is not None:
+            H_compose_cam = np.zeros((6, 6), order='F')
+            T_ref_cam_c = T_ref_cam.compose(camera_motions[i], H_compose_cam, np.zeros((6, 6), order='F'))
+        point_cam = T_ref_cam_c.transformTo(point_ref, H_cam, H_pref)
         rows = slice(2 * i, 2 * i + 2)
         try:
             pixel = camera.project(point_cam, np.zeros((2, 6), order='F'),
@@ -69,7 +77,7 @@ def tag_corner_residual(
             continue
         residual[rows] = pixel - measured[i]
         if compute_jacobians:
-            J[0][rows] = H_proj @ H_cam
+            J[0][rows] = H_proj @ H_cam @ H_compose_cam
             J[1][rows] = H_proj @ H_pref @ H_body @ H_compose
             J[2][rows] = H_proj @ H_pref @ H_pbody @ H_tag
     if compute_jacobians:
@@ -86,11 +94,13 @@ def make_tag_factor(
         calibration: gtsam.Cal3Fisheye,
         noise_model,
         corner_motions: Optional[List[gtsam.Pose3]] = None,
-        camera_offset: Optional[gtsam.Pose3] = None) -> gtsam.CustomFactor:
+        camera_offset: Optional[gtsam.Pose3] = None,
+        camera_motions: Optional[List[gtsam.Pose3]] = None) -> gtsam.CustomFactor:
     """
     Tag corner projection factor (TagSLAM, Pfrommer & Daniilidis 2019).
     Each pose is either a variable key (int) or a known gtsam.Pose3.
-    corner_motions: rolling shutter motion per corner, see tag_corner_residual.
+    corner_motions / camera_motions: rolling shutter motion per corner of the body / of the camera,
+        see tag_corner_residual.
     camera_offset: known transform composed onto the first pose, the camera
         pose is T_ref_cam * camera_offset (e.g. IMU pose * T_imu_cam).
     """
@@ -107,9 +117,9 @@ def make_tag_factor(
             current[0] = current[0].compose(camera_offset, H_offset, np.zeros((6, 6), order='F'))
         if H is None:
             return tag_corner_residual(*current, object_points, measured, calibration,
-                corner_motions=corner_motions)
+                corner_motions=corner_motions, camera_motions=camera_motions)
         residual, J = tag_corner_residual(*current, object_points, measured,
-            calibration, compute_jacobians=True, corner_motions=corner_motions)
+            calibration, compute_jacobians=True, corner_motions=corner_motions, camera_motions=camera_motions)
         J[0] = J[0] @ H_offset
         for i, Ji in enumerate([J[j] for j in range(3) if is_key[j]]):
             H[i] = Ji

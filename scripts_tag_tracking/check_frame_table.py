@@ -10,7 +10,9 @@ B. Independent cross-check: the aligned (fused, wrist-clock) TCP against the
    head camera's own cube measurement x T_cube_tcp at the same head frames:
    position / rotation difference, and the remaining time offset between them
    (difference regressed on the head-measured velocity: a sync error of d ms
-   shows as difference = velocity * d). Should be ~0 ms after 03s_sync_wrists.py.
+   shows as difference = velocity * d), from positions and from rotations
+   (a constant calibration error is a constant angle and drops out). ~0 ms when
+   the wrist sync, the IMU time offset and the head timing are consistent.
 C. Physics: TCP speed, lowest TCP height (fingertips at the table: ~0 cm),
    gripper width (opening relative to fully closed, as in UMI) within 0 .. its
    calibrated open width, share of widths from one finger tag.
@@ -76,7 +78,7 @@ def main(input, config):
         print(f"{head['name']}: wrist sync {'applied' if corrections else 'NOT applied (no wrist_sync.json)'}, "
             f"poses {', '.join(g['side'] + ' ' + g['pose_source'] for g in grippers)}")
         totals = {g['side']: {'rows': 0, 'aligned': 0, 'native': 0, 'native_valid': 0, 'width': 0, 'one_tag': 0,
-            'width_measured': 0, 'dp': [], 'dr': [], 'diff': [], 'vel': [], 'speed': [], 'z': [], 'width_out': 0}
+            'width_measured': 0, 'dp': [], 'dr': [], 'diff': [], 'vel': [], 'ang_diff': [], 'ang_vel': [], 'speed': [], 'z': [], 'width_out': 0}
             for g in grippers}
         n_rows = interval_issues = 0
         frame_jitter = 0.0
@@ -138,6 +140,10 @@ def main(input, config):
                         vel = (hp_all[nxt, :3] - hp_all[prev, :3]) / (obs[nxt] - obs[prev])[:, None]
                         t['diff'].append(fused[mid, :3] - hp_all[mid, :3])
                         t['vel'].append(vel)
+                        # rotation only: a constant calibration error is a constant angle, removed by the fit
+                        R_prev, R_next = Rotation.from_quat(hp_all[prev, 3:]), Rotation.from_quat(hp_all[nxt, 3:])
+                        t['ang_vel'].append((R_next * R_prev.inv()).as_rotvec() / (obs[nxt] - obs[prev])[:, None])
+                        t['ang_diff'].append((Rotation.from_quat(fused[mid, 3:]) * Rotation.from_quat(hp_all[mid, 3:]).inv()).as_rotvec())
                 # C. physics
                 if ok.sum() > 2:
                     k_ok = np.flatnonzero(ok)
@@ -152,13 +158,16 @@ def main(input, config):
             dp = np.concatenate(t['dp']) if t['dp'] else np.array([])
             dr = np.concatenate(t['dr']) if t['dr'] else np.array([])
             offset = residual_time_offset(np.concatenate(t['diff']), np.concatenate(t['vel'])) if t['diff'] else np.nan
+            rot_offset = residual_time_offset(np.concatenate(t['ang_diff']), np.concatenate(t['ang_vel'])) \
+                if t['ang_diff'] else np.nan
             speed = np.concatenate(t['speed']) if t['speed'] else np.array([0.0])
             z = np.concatenate(t['z']) if t['z'] else np.array([np.nan])
             print(f"  {side}:")
             if len(dp):
                 print(f"    B vs head cube measurement ({len(dp)} frames): position median {np.median(dp) * 1e3:.1f} mm, "
                     f"95% {np.percentile(dp, 95) * 1e3:.1f} mm; rotation median {np.degrees(np.median(dr)):.2f} deg, "
-                    f"95% {np.degrees(np.percentile(dr, 95)):.2f} deg; remaining time offset {offset * 1e3:+.2f} ms")
+                    f"95% {np.degrees(np.percentile(dr, 95)):.2f} deg; remaining time offset {offset * 1e3:+.2f} ms (position), "
+                    f"{rot_offset * 1e3:+.2f} ms (rotation, independent of the calibration)")
             print(f"    C physics: TCP speed 99% {np.percentile(speed, 99):.2f} m/s max {speed.max():.2f} m/s, "
                 f"lowest TCP {np.nanmin(z) * 100:.1f} cm (1st percentile {np.nanpercentile(z, 1) * 100:.1f} cm), "
                 f"widths outside the calibrated range {t['width_out']}, from one finger tag "
