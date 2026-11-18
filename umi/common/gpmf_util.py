@@ -123,3 +123,42 @@ def video_frame0_time(mp4_path: str, frame_duration: float) -> float:
     d = timing.get('CORI', timing.get('MSKP'))
     assert d is not None and d['stmp_us'][0] >= 0, f"{mp4_path}: no per-frame GPMF stream with STMP"
     return d['stmp_us'][0] * 1e-6 - (d['tsmp'][0] - d['n'][0]) * frame_duration
+
+
+def fit_stream_timing(d: Dict[str, np.ndarray]) -> dict:
+    """
+    Line fit STMP = start + period * (samples before the payload) over the
+    payloads of one stream (stream_timing): sample period and start on the
+    camera clock (us), residual RMS / max (us).
+    """
+    before = d['tsmp'] - d['n']
+    ok = d['stmp_us'] >= 0
+    period, start = np.polyfit(before[ok], d['stmp_us'][ok], 1)
+    residual = d['stmp_us'][ok] - (start + period * before[ok])
+    return {'period_us': float(period), 'start_us': float(start), 'rms_us': float(np.sqrt(np.mean(residual ** 2))),
+        'max_us': float(np.max(np.abs(residual))), 'n_payloads': int(ok.sum()), 'n_samples': int(d['tsmp'][-1])}
+
+
+def frame_timing(mp4_path: str) -> Optional[dict]:
+    """
+    Video frames on the camera clock, from the per-frame GPMF stream (CORI,
+    else MSKP): measured frame rate (Hz), how uniform the frame times are
+    (payload residual RMS / max, us), number of frame samples, and the frames
+    the camera reports skipped (nonzero MSKP / LSKP values). None without a
+    per-frame stream.
+    """
+    timing = stream_timing(mp4_path, ('CORI', 'MSKP'))
+    d = timing.get('CORI', timing.get('MSKP'))
+    if d is None or not np.any(d['stmp_us'] >= 0):
+        return None
+    fit = fit_stream_timing(d)
+    skipped = {'MSKP': 0, 'LSKP': 0}
+    for payload in mp4_gpmf_payloads(mp4_path):
+        for devc in payload['klv']:
+            for strm in devc.get('children', []):
+                for c in strm.get('children', []):
+                    if c['key'] in skipped and 'value' in c:
+                        skipped[c['key']] += int(np.count_nonzero(c['value']))
+    return {'stream': 'CORI' if 'CORI' in timing else 'MSKP', 'rate_hz': 1e6 / fit['period_us'],
+        'rms_us': fit['rms_us'], 'max_us': fit['max_us'], 'n_frames': fit['n_samples'],
+        'skipped_mskp': skipped['MSKP'], 'skipped_lskp': skipped['LSKP'], 'has_skip_counters': 'MSKP' in timing}

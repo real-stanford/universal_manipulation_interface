@@ -233,3 +233,16 @@ def wrist_corrections(sync: Optional[dict], head_name: str) -> Dict[str, dict]:
     if sync is None:
         return dict()
     return {name: x['line'] for name, x in sync['videos'].get(head_name, dict()).items() if x.get('line') is not None}
+
+
+def head_to_wrist_time(head_time, head: dict, wrist: dict, corrections: Dict[str, dict]):
+    """
+    Wrist video time of head video time(s): inverse of the mapping wrist ->
+    head (session start timestamps plus the wrist sync correction; the drift
+    over one correction is negligible, so the correction is evaluated at the
+    head time).
+    """
+    t = np.asarray(head_time, dtype=float)
+    if wrist['name'] in corrections:
+        t = t - correction_seconds(corrections[wrist['name']], t)
+    return t + head['start_timestamp'] - wrist['start_timestamp']

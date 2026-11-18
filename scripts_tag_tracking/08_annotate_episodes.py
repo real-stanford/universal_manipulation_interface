@@ -51,7 +51,7 @@ import cv2
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
-from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
+from umi.tag_tracking.wrist_sync import wrist_corrections, head_to_wrist_time
 from umi.tag_tracking.delivery import gripper_streams
 from umi.tag_tracking.annotation import (gripper_events, measured_items, frame_times_for_review,
     response_schema, request_text, merge_annotation)
@@ -192,11 +192,8 @@ def main(input, config, output, episodes, task_prompt, model, effort, max_frames
             for g in grippers:
                 arm = [x for x in events.values() if x['arm'] == g['side']]
                 for wrist in wrists[g['side']]:
-                    # head time -> this wrist video's time (inverse of gripper_streams' mapping)
                     def to_wrist(t):
-                        if wrist['name'] in corrections:
-                            t = t - float(correction_seconds(corrections[wrist['name']], t))
-                        return t + head['start_timestamp'] - wrist['start_timestamp']
+                        return float(head_to_wrist_time(t, head, wrist, corrections))
                     length = wrist['end_timestamp'] - wrist['start_timestamp']
                     inside = [x for x in arm if 0 <= to_wrist(x['t']) < length]
                     frames = read_frames(wrist['dir'].joinpath('raw_video.mp4'), [to_wrist(x['t']) for x in inside])

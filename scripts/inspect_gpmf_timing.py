@@ -23,18 +23,9 @@ sys.path.append(ROOT_DIR)
 import av
 import click
 import numpy as np
-from umi.common.gpmf_util import stream_timing, mp4_gpmf_payloads
+from umi.common.gpmf_util import stream_timing, mp4_gpmf_payloads, fit_stream_timing
 
 KEYS = ('ACCL', 'GYRO', 'CORI', 'MSKP', 'SHUT', 'AALP')
-
-
-def fit_stream(d: dict) -> dict:
-    before = d['tsmp'] - d['n']
-    ok = d['stmp_us'] >= 0
-    period, start = np.polyfit(before[ok], d['stmp_us'][ok], 1)
-    residual = d['stmp_us'][ok] - (start + period * before[ok])
-    return {'period_us': period, 'start_us': start, 'rms_us': float(np.sqrt(np.mean(residual ** 2))),
-        'max_us': float(np.max(np.abs(residual))), 'n_payloads': int(ok.sum()), 'n_samples': int(d['tsmp'][-1])}
 
 
 # %%
@@ -54,7 +45,7 @@ def main(videos):
         print(f"  MP4: {n_frames} frames x {frame_duration * 1e6:.3f} us = {video_duration:.4f} s video, "
             f"audio {audio_duration:.4f} s at {audio_rate} Hz")
         timing = stream_timing(path, KEYS)
-        fits = {k: fit_stream(d) for k, d in timing.items()}
+        fits = {k: fit_stream_timing(d) for k, d in timing.items()}
         for k, f in fits.items():
             print(f"  {k}: period {f['period_us']:.4f} us ({1e6 / f['period_us']:.4f} Hz), first sample at camera "
                 f"{f['start_us'] / 1e3:.3f} ms, residual RMS {f['rms_us']:.1f} us max {f['max_us']:.1f} us, "
