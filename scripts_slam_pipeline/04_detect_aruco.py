@@ -71,7 +71,9 @@ def main(input_dir, camera_intrinsics, aruco_yaml, tag_tracking_config, wrist_on
     with ExifTool() as et:
         for video_dir in video_dirs:
             serial = list(et.get_metadata(str(video_dir.joinpath('raw_video.mp4'))))[0]['QuickTime:CameraSerialNumber']
-            if wrist_only and (serial not in wrist_serials or video_dir.name == 'mapping'):
+            # gripper calibration videos are wrist videos whatever camera recorded them
+            is_wrist = serial in wrist_serials or video_dir.name.startswith('gripper_calibration')
+            if wrist_only and (not is_wrist or video_dir.name == 'mapping'):
                 print(f"{video_dir.name}: skipped (--wrist_only)")
                 continue
             video_intrinsics[video_dir] = serial_intrinsics.get(serial, camera_intrinsics)

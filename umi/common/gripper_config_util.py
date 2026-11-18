@@ -21,6 +21,10 @@ def load_gripper_config(path: Optional[str]) -> Optional[dict]:
                                     # along the camera optical axis [m], measured
         cam_to_center_height: 0.075 # optional, this gripper's TCP geometry, overrides the
         tcp_offset: 0.177           # shared values above (tag tracking calibrate_setup.py)
+        range_camera: C3501325427851  # optional: the opening range (gripper_range.json) is from
+                                    # this camera's gripper calibration video (the finger tag
+                                    # distance is the gripper's, the camera then needs its own
+                                    # entry with the same finger tags)
     """
     if path is None:
         return None
@@ -32,6 +36,12 @@ def load_gripper_config(path: Optional[str]) -> Optional[dict]:
         for key in ['gripper_id', 'left_finger_tag_id', 'right_finger_tag_id']:
             assert key in gripper, f"{key} missing for camera {serial}"
         assert gripper['left_finger_tag_id'] != gripper['right_finger_tag_id']
+        if 'range_camera' in gripper:
+            source = config['grippers'].get(gripper['range_camera'])
+            assert source is not None, f"{serial}: range_camera {gripper['range_camera']} needs its own entry"
+            assert (source['left_finger_tag_id'], source['right_finger_tag_id']) == \
+                (gripper['left_finger_tag_id'], gripper['right_finger_tag_id']), \
+                f"{serial}: range_camera {gripper['range_camera']} has other finger tags"
         gripper_ids.append(gripper['gripper_id'])
     assert len(set(gripper_ids)) == len(gripper_ids), "gripper_id must be unique"
     return config

@@ -242,7 +242,7 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 is_valid.append(pose_valid)
 
                 gripper = hardware['grippers'][wrist['camera_serial']]
-                gripper_range = load_gripper_range(session, wrist['camera_serial'])
+                gripper_range = load_gripper_range(session, wrist['camera_serial'], gripper)
                 detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
                 # same widths as the delivery: one-tag widths from the calibrated finger midpoint
                 all_widths, _, _ = finger_widths(detections, gripper['left_finger_tag_id'],

@@ -93,10 +93,12 @@ def align_values(times: np.ndarray, values: np.ndarray, query: np.ndarray, max_s
     return out
 
 
-def load_gripper_range(session: pathlib.Path, serial: str) -> Dict:
+def load_gripper_range(session: pathlib.Path, serial: str, gripper: Optional[Dict] = None) -> Dict:
     """
     gripper_range.json (05_run_calibrations.py) of a wrist camera: finger tag distance min / max (m).
+    With the gripper's config entry: from its range_camera's calibration video if it has one.
     """
+    serial = (gripper or dict()).get('range_camera', serial)
     with ExifTool() as et:
         for path in session.glob('demos/gripper_calibration*/gripper_range.json'):
             meta = list(et.get_metadata(str(path.parent.joinpath('raw_video.mp4'))))[0]
@@ -218,7 +220,7 @@ def gripper_streams(session: pathlib.Path, config: Dict, videos: List[dict], hea
             pose_times, T_world_tcp = track['time'], b['T_world_body'] @ np.array(tcp[name]['T_cube_tcp'])
             pose_valid, source = b['is_valid_world'], 'head_camera_tags'
         gripper = hardware['grippers'][serial]
-        gripper_range = load_gripper_range(session, serial)
+        gripper_range = load_gripper_range(session, serial, gripper)
         width_times, widths, width_tags, centers = list(), list(), list(), list()
         for wrist in overlapping(videos, head, serial):
             detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))

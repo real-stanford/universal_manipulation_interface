@@ -19,6 +19,12 @@ grippers:
     # TCP as measured on the 2026-11-16 grippers (same design): fingertips 192 mm in front
     # of the lens, 75 mm below its centre (shared values above)
     finger_tag_to_tip: 0.113
+    # opening range from gripper_calib_right.MP4, recorded on this gripper with its camera before 10:39
+    range_camera: C3501325427851
+  C3501325427851:   # the right gripper's camera until 10:39 (gripper calibration video only)
+    gripper_id: 2
+    left_finger_tag_id: 6
+    right_finger_tag_id: 7
   C3501326029433:   # left hand: gripper with fingers 0 / 1 and this camera (right hand on 2026-11-16)
     gripper_id: 1
     left_finger_tag_id: 0
