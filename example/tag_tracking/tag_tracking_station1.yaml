@@ -39,7 +39,7 @@ bodies:
     gripper_camera: C3501326500348
     robot_index: 0   # UMI convention: 0 right, 1 left
   left_cube:
-    tags: [2, 4, 5]   # tag 3 no longer on this cube at station1 (its detections are misreads)
+    tags: [2, 3, 4, 5]
     gripper_camera: C3501326029433
     robot_index: 1
 
