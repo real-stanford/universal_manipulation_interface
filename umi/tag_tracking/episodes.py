@@ -134,6 +134,12 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
         stretches = episodes_from_idle(idle, take_end, params['min_episode_sec'])
         for e in stretches:
             e['n_bangs'] = int(np.sum((bangs >= e['active_start']) & (bangs <= e['active_end'])))
+    elif params['boundary'] == 'video':
+        # one episode per head video (recordings started / stopped per episode, continuous
+        # work inside): the whole video; the task interval (docking, first / last bang)
+        # comes from 03t_trim_docking.py
+        stretches = [{'start': 0.0, 'end': take_end, 'active_start': 0.0, 'active_end': take_end,
+            'n_bangs': int(len(bangs)), 'status': 'ok' if take_end >= params['min_episode_sec'] else 'too_short'}]
     else:
         assert params['boundary'] == 'bang', f"unknown episode boundary {params['boundary']}"
         stretches = episodes_from_events(idle, bangs, take_end, params['idle_margin'], params['min_episode_sec'])

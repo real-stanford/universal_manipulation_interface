@@ -76,7 +76,8 @@ DEFAULTS = {
     'dock_distance': 0.35,
     'min_dock_frames': 15,
     'sync_search': 0.1,
-    # episode boundaries: 'dock' (between dock periods, docking trimmed after tracking) or 'bang'
+    # episode boundaries: 'dock' (between dock periods, docking trimmed after tracking), 'bang'
+    # (first to last bang) or 'video' (one episode per head video)
     'boundary': 'dock',
     'sync_min_correlation': 0.5,
 }
