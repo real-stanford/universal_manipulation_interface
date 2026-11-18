@@ -17,6 +17,10 @@ From one session of the setup, processed up to segment_episodes
    at the same time: audio sync start times (audio_sync_offsets.json), with
    --wrist_sync also the motion sync correction of a previous run of the
    session (tag_tracking/wrist_sync.json, 03s_sync_wrists.py; second pass);
+   --body_shape <body>=<bodies.json>:<body there> takes a cube's shape (tag
+   poses) from an earlier setup calibration of the same physical cube instead
+   of estimating it, e.g. when a cube face is rarely seen from where the
+   gripper is now held; recorded in report.json (shape_sources);
 5. wrist camera to TCP from the gripper geometry (gripper config
    cam_to_center_height / cam_to_mount_offset / tcp_offset, per gripper under
    grippers.<camera serial> or shared at the top level, defaults as UMI;
@@ -78,11 +82,13 @@ from umi.tag_tracking.setup_calibration import (frames_with_neighbors, select_cu
 @click.option('--search_line_delay', is_flag=True, default=False, help='Ignore the readout time, search the line delay')
 @click.option('-ws', '--wrist_sync', default=None,
     help='wrist_sync.json of a previous run of this session: wrist clocks with the motion sync correction')
+@click.option('--body_shape', multiple=True,
+    help='<body>=<bodies.json>:<body there>: cube shape from an earlier setup calibration of the same cube')
 @click.option('--head_video', default=None,
     help='Head task video to calibrate from (demos/ directory name), default the longest')
 @click.option('-j', '--num_workers', type=int, default=None, help='Worker processes, default all cores')
 def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tcp_only, readout_ms,
-        search_line_delay, wrist_sync, head_video, num_workers):
+        search_line_delay, wrist_sync, body_shape, head_video, num_workers):
     t_start = time.time()
     output = pathlib.Path(os.path.expanduser(output)).absolute()
     config = load_tag_tracking_config(config)
@@ -170,6 +176,28 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
     executor = make_executor(num_workers)
     noise_model, line_delay, results = calibrate_bodies(head_camera, body_frames,
         {name: bodies[name] for name in body_frames}, config['tag_sizes'], executor, n_chunks, readout_time)
+    shape_sources = dict()
+    for spec in body_shape:
+        name, source = spec.split('=', 1)
+        path, source_body = source.rsplit(':', 1)
+        assert name in gripper_names, f"--body_shape {spec}: {name} is not a gripper body ({gripper_names})"
+        known = json.load(open(os.path.expanduser(path), 'r'))['bodies'][source_body]
+        tags = {int(k) for k in known['T_body_tags']}
+        assert tags == set(bodies[name]['tags']), f"--body_shape {spec}: tags {sorted(tags)} != {name} tags {bodies[name]['tags']}"
+        estimated = results[name]
+        T_known = {int(k): np.array(v) for k, v in known['T_body_tags'].items()}
+        # agreement of the tags both have, after aligning on the known anchor
+        anchor = int(known['anchor_tag'])
+        T_align = np.linalg.inv(estimated['T_body_tags'][anchor]) if anchor in estimated['T_body_tags'] else None
+        agreement = {t: float(np.linalg.norm((T_align @ estimated['T_body_tags'][t])[:3, 3] - T_known[t][:3, 3]) * 1000)
+            for t in T_known if T_align is not None and t in estimated['T_body_tags']}
+        results[name] = {**estimated, 'anchor_tag': anchor, 'T_body_tags': T_known, 'missing_tags': known['missing_tags'],
+            'tag_rms_px': {int(k): v for k, v in known['tag_rms_px'].items()},
+            'variance_factor': known['variance_factor'], 'n_frames_used': known['n_frames_used'],
+            'n_frames_consistent': known['n_frames_consistent']}
+        shape_sources[name] = {'source': f"{path}:{source_body}", 'estimated_here_minus_source_mm': agreement}
+        print(f"  {name}: shape from {path}:{source_body}; estimated here vs that shape (mm): "
+            + ', '.join(f"tag {t} {d:.1f}" for t, d in sorted(agreement.items())))
     for name, x in results.items():
         print(f"  {name}: anchor {x['anchor_tag']}, tags {sorted(x['T_body_tags'])}, missing {x['missing_tags']}, "
             f"{x['n_frames_consistent']}/{x['n_frames_used']} multi-tag frames consistent, "
@@ -242,6 +270,7 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
         'n_frames': {name: len(f) for name, f in body_frames.items()},
         'missing_tags': {name: x['missing_tags'] for name, x in results.items()},
         'variance_factor': {name: x['variance_factor'] for name, x in results.items()},
+        'shape_sources': shape_sources,
         'line_delay_us': line_delay * 1e6,
         'readout_ms': None if readout_time is None else readout_time * 1000,
         'wrist_clocks': 'audio sync' if wrist_sync is None else f'audio sync + motion sync ({wrist_sync})',
