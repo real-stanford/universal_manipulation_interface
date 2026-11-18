@@ -15,7 +15,7 @@ from umi.common.audio_sync_util import read_audio_mono
 from umi.tag_tracking.imu import load_imu
 from umi.tag_tracking.wrist_events import (DEFAULTS, gyro_rms, still_mask, accel_highpass, accel_peaks, robust_line,
     joint_spikes, docked_near, merge_bangs, audio_onset_ratio, audio_clicks, estimate_audio_lag, max_near,
-    docked_view, idle_periods, episodes_from_events)
+    docked_view, idle_periods, episodes_from_events, bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms, robust_drift_line)
 
 GRID_DT = 0.01
 # joint spikes kept for diagnostics down to this strength (m/s^2)
@@ -32,7 +32,14 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
     params: DEFAULTS keys (the episodes section of the tag tracking config).
 
     Returns:
-        episodes: [{'start', 'end', 'active_start', 'active_end', 'n_bangs'}] (status ok)
+        episodes: [{'start', 'end', 'active_start', 'active_end', 'n_bangs', 'audio_clock'}] (status ok);
+            audio_clock: diagnostic, per wrist video name recording the episode,
+            {'gripper', 'offset_ms', 'residual_ms', 'bang_offsets_ms'} or None
+        audio_clock: diagnostic, per wrist video name, its audio clock against the
+            head audio from the bang clicks (wrist_events.wrist_clock_line) or None.
+            GoPro audio is not locked to the video (task3: drifting up to 0.8 ms/min
+            against the camera's own IMU), so this is not applied: the wrist video
+            clocks are corrected from motion (03s_sync_wrists.py).
         rejected: [{'active_start', 'active_end', 'status', 'n_bangs'}]
         idle: [{'start', 'end', 'n_docked_frames', 'idle'}] all still periods of both grippers
         bangs, audio_lag, n_lag_pairs, n_clicks
@@ -53,8 +60,8 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
 
     # head audio on the head video clock (audio_offset: audio start relative to the first frame)
     audio, sample_rate, audio_offset = read_audio_mono(str(head['dir'].joinpath('raw_video.mp4')))
-    audio_times, audio_ratio = audio_onset_ratio(audio, sample_rate, frame_times[0] + audio_offset)
-    del audio
+    head_audio_start = frame_times[0] + audio_offset
+    audio_times, audio_ratio = audio_onset_ratio(audio, sample_rate, head_audio_start)
 
     # wrist IMUs on the head video clock (audio synchronized start times)
     rms_on_grid, still_on_grid, accel_times, accel_high, peaks = list(), list(), list(), list(), list()
@@ -117,11 +124,60 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
             lag_line = (lag_a, lag_b)
     bangs, bang_strengths = merge_bangs(joint['time'][candidate], joint['strength'][candidate],
         params['bang_accel'], params['bang_merge_sec'])
+    # per bang: wrist-to-wrist spike time difference (gripper 1 - gripper 0) and the head click
+    bang_wrist_dt = np.array([joint['dt'][np.argmin(np.abs(joint['time'] - t))] for t in bangs])
+    head_clicks = [bang_click(audio_times, audio_ratio, t + lag_a + lag_b * t, params['audio_tolerance'],
+        params['audio_ratio']) for t in bangs]
 
     idle = idle_periods(grid, still_on_grid[0] & still_on_grid[1], frame_times, frame_docked, params['min_dock_frames'])
     stretches = episodes_from_events(idle, bangs, take_end, params['idle_margin'], params['min_episode_sec'])
     episodes = [{k: e[k] for k in ['start', 'end', 'active_start', 'active_end', 'n_bangs']}
         for e in stretches if e['status'] == 'ok']
+
+    # diagnostic: per wrist video, its audio clock against the head audio at every bang it
+    # recorded (head click matched in its audio), a drift line over the take
+    wrist_sync = dict()
+    for e in episodes:
+        e['audio_clock'] = dict()
+    for g, wrists in enumerate(gripper_wrists):
+        for wrist in wrists:
+            offset = wrist['start_timestamp'] - head['start_timestamp']
+            w_audio, w_rate, w_audio_offset = read_audio_mono(str(wrist['dir'].joinpath('raw_video.mp4')))
+            assert w_rate == sample_rate, f"{wrist['name']}: audio {w_rate} Hz, head {sample_rate} Hz"
+            measured = [(t, click_offset(audio, head_audio_start, w_audio, offset + w_audio_offset, sample_rate,
+                h, params['sync_search'])) for t, h in zip(bangs, head_clicks) if h is not None]
+            del w_audio
+            measured = [(t, m) for t, m in measured if m is not None]
+            line = wrist_clock_line([t for t, _ in measured], [m[0] for t, m in measured],
+                [m[1] for t, m in measured], params['sync_min_correlation'])
+            if line is not None:
+                # check: this camera's own IMU spike to its own audio click at the matched bangs;
+                # constant over the take if its audio and IMU (video) clocks run together
+                for item, (t, (offset_s, _)) in zip(line['bangs'], measured):
+                    k = int(np.argmin(np.abs(joint['time'] - t)))
+                    spike = joint['time'][k] + (0.5 if g == 1 else -0.5) * joint['dt'][k]
+                    h = head_clicks[int(np.argmin(np.abs(bangs - t)))]
+                    item['imu_to_audio_ms'] = float(((h - offset_s) - spike) * 1e3)
+                used = np.array([b['inlier'] for b in line['bangs']])
+                if used.sum() >= 3:
+                    a, b, ok = robust_drift_line(np.array([b['time'] for b in line['bangs']]),
+                        np.array([b['imu_to_audio_ms'] for b in line['bangs']]) * 1e-3, used)
+                    line['imu_to_audio'] = {'offset_ms': a * 1e3, 'drift_ms_per_min': b * 60e3, 'n_inliers': int(ok.sum()),
+                        'residual_ms': float(np.sqrt(np.mean((np.array([x['imu_to_audio_ms'] for x in line['bangs']])[ok]
+                            - (a + b * np.array([x['time'] for x in line['bangs']])[ok]) * 1e3) ** 2)))}
+            wrist_sync[wrist['name']] = None if line is None else {'gripper': g, **line}
+            # episodes this wrist video records entirely
+            for e in episodes:
+                if not (wrist['start_timestamp'] <= head['start_timestamp'] + e['start']
+                        and head['start_timestamp'] + e['end'] <= wrist['end_timestamp']):
+                    continue
+                e['audio_clock'][wrist['name']] = None if line is None else {
+                    'gripper': g,
+                    'offset_ms': wrist_clock_offset_ms(line, 0.5 * (e['start'] + e['end'])),
+                    'residual_ms': line['residual_ms'],
+                    'bang_offsets_ms': [b['offset_ms'] for b in line['bangs'] if e['start'] <= b['time'] <= e['end']]
+                }
+    del audio
     rejected = [{k: e[k] for k in ['active_start', 'active_end', 'status', 'n_bangs']}
         for e in stretches if e['status'] != 'ok']
 
@@ -131,6 +187,8 @@ def segment_take(head: dict, gripper_wrists: Sequence[List[dict]], cube_tags: Se
         'idle': idle,
         'bangs': bangs.tolist(),
         'bang_strengths': bang_strengths.tolist(),
+        'bang_wrist_dt_ms': (bang_wrist_dt * 1e3).tolist(),
+        'audio_clock': wrist_sync,
         # lag(t) = a + b * t (head video seconds), wrist-to-wrist dt(t) likewise
         'audio_lag': None if lag_line is None else lag_a,
         'audio_lag_drift_ms_per_min': None if lag_line is None else lag_b * 60e3,

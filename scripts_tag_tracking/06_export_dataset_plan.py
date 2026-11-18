@@ -14,6 +14,11 @@ partly outside it (a wrist video stopped during them) are dropped. Following 06:
   interpolated to the grid only between two valid tracked head frames;
 - gripper width from the wrist camera finger tags (04 tag_detection.pkl)
   and gripper_range.json, as in 06;
+- wrist clocks: audio sync start times + the motion sync correction of
+  tag_tracking/wrist_sync.json (03s_sync_wrists.py) at each episode: steps at
+  the robot0 camera frames' corrected times, each camera's frames shifted by
+  whole frames; per camera frame0_time (corrected session time of frame 0),
+  clock_correction_ms and imu_time_offset (wrist cameras) for 07;
 - a step is valid if all grippers' poses are valid; valid segments
   shorter than min_episode_length are dropped; one episode per segment.
 With an 'episodes' section in the config (continuous takes), episodes come
@@ -57,6 +62,8 @@ from umi.common.interpolation_util import (
 )
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
+from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
+from umi.tag_tracking.imu import load_cam_imu_calibration
 
 
 # %%
@@ -113,12 +120,13 @@ def load_gripper_width_interpolator(session, serial):
 @click.option('-i', '--input', required=True, help='Session directory')
 @click.option('-c', '--config', required=True, help='Tag tracking config yaml')
 @click.option('-o', '--output', default=None, help='Default <input>/dataset_plan.pkl')
+@click.option('-ws', '--wrist_sync', default=None, help='Default <input>/tag_tracking/wrist_sync.json (if present)')
 @click.option('-r', '--reference', type=click.Choice(['world', 'head']), default='world')
 @click.option('-ml', '--min_episode_length', type=int, default=24, help='Same default as 06')
 @click.option('-nh', '--no_head_camera', is_flag=True, default=False, help='Exclude head camera images')
 @click.option('-mt', '--max_trim_sec', type=float, default=1.0,
     help='Episodes: trim invalid steps at the start / end, at most this long per side (s)')
-def main(input, config, output, reference, min_episode_length, no_head_camera, max_trim_sec):
+def main(input, config, output, wrist_sync, reference, min_episode_length, no_head_camera, max_trim_sec):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     if output is None:
         output = session.joinpath('dataset_plan.pkl')
@@ -137,12 +145,33 @@ def main(input, config, output, reference, min_episode_length, no_head_camera, m
         episodes = json.load(episodes_path.open('r'))['videos']
         max_gap_sec = config['episodes']['max_gap_sec']
 
+    # wrist clocks: audio sync start times + motion sync correction (03s_sync_wrists.py)
+    sync_path = session.joinpath('tag_tracking', 'wrist_sync.json') if wrist_sync is None else pathlib.Path(wrist_sync)
+    sync = json.load(sync_path.open('r')) if sync_path.is_file() else None
+    if sync is None:
+        print("no tag_tracking/wrist_sync.json (03s_sync_wrists.py): wrist clocks from the audio sync only")
+
     all_plans = list()
     total_time = 0.0
     used_time = 0.0
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         head_times = head['start_timestamp'] + track['time']
+        corrections = wrist_corrections(sync, head['name'])
+
+        def imu_time_offset(video):
+            serial = video['camera_serial']
+            if serial == config['head_camera'] or serial not in config.get('gripper_imu', dict()):
+                return None
+            return float(load_cam_imu_calibration(config['gripper_imu'][serial]['cam_imu_calibration'])['time_offset'])
+
+        def correction(video, t_session):
+            """
+            Seconds to add to a video's times (session clock) at session time(s) t; 0 for the head.
+            """
+            if video['name'] not in corrections:
+                return np.zeros_like(np.asarray(t_session, dtype=float))
+            return correction_seconds(corrections[video['name']], np.asarray(t_session) - head['start_timestamp'])
 
         # a wrist camera may have split the take into several videos (stopped and restarted):
         # one demo per combination of wrist videos (one per gripper) that overlap in time
@@ -187,6 +216,8 @@ def main(input, config, output, reference, min_episode_length, no_head_camera, m
             tcp_poses = list()
             gripper_widths = list()
             is_valid = list()
+            pose_inputs = list()
+            width_interpolators = list()
             for (_, name), wrist in zip(gripper_bodies, demo_videos):
                 body = track['bodies'][name]
                 T_cube_tcp = np.array(tcp_calibration[name]['T_cube_tcp'])
@@ -206,6 +237,7 @@ def main(input, config, output, reference, min_episode_length, no_head_camera, m
                     T_ref_tcp = np.where(valid[:, None, None], T_ref_cube @ T_cube_tcp, np.nan)
                     pose_times = head_times
                 pose, pose_valid = interpolate_valid_poses(pose_times, T_ref_tcp, valid, demo_timestamps, max_gap_sec)
+                pose_inputs.append((pose_times, T_ref_tcp, valid))
                 tcp_poses.append(pose)
                 is_valid.append(pose_valid)
 
@@ -220,8 +252,12 @@ def main(input, config, output, reference, min_episode_length, no_head_camera, m
                     if width is not None:
                         width_times.append(wrist['start_timestamp'] + d['time'])
                         widths.append(width_calibration(width))
-                print(f"{wrist['name']}: gripper width in {len(widths) / len(detections) * 100:.0f}% of frames")
-                gripper_widths.append(get_interp1d(np.array(width_times), np.array(widths))(demo_timestamps))
+                print(f"{wrist['name']}: gripper width in {len(widths) / len(detections) * 100:.0f}% of frames"
+                    + ('' if wrist['name'] in corrections or sync is None else '; no wrist sync correction, audio sync only'))
+                width_times = np.array(width_times)
+                width_times = width_times + correction(wrist, width_times)
+                width_interpolators.append(get_interp1d(width_times, np.array(widths)))
+                gripper_widths.append(width_interpolators[-1](demo_timestamps))
 
             is_step_valid = np.all(is_valid, axis=0)
             print(f"{head['name']}: {n_frames} frames, valid poses "
@@ -291,21 +327,54 @@ def main(input, config, output, reference, min_episode_length, no_head_camera, m
                     for s, valid in zip(segments, segment_type) if valid]
 
             for s, demo_start_poses, demo_end_poses in segment_poses:
+                # wrist clock correction of the segment: the steps are the robot0 camera's frames, on
+                # the head clock at their corrected times; poses and widths there; each camera's frames
+                # shifted by its correction relative to robot0 (whole frames)
+                t_mid = 0.5 * (demo_timestamps[s.start] + demo_timestamps[s.stop - 1])
+                shift = [float(correction(x, t_mid)) for x in demo_videos]
+                times = demo_timestamps[s] + shift[0]
+                poses, valids = zip(*[interpolate_valid_poses(*pose_inputs[g], times, max_gap_sec)
+                    for g in range(len(gripper_bodies))])
+                widths = [width_interpolators[g](times) for g in range(len(gripper_bodies))]
+                valid = np.all(valids, axis=0)
+                if not valid.all():
+                    # the shift (a few ms) can move an edge step out of a tracked stretch: trim it
+                    ok = np.flatnonzero(valid)
+                    a_, b_ = (ok[0], ok[-1] + 1) if len(ok) else (0, 0)
+                    if len(ok) == 0 or not valid[a_:b_].all() or a_ > 3 or len(valid) - b_ > 3 or b_ - a_ < min_episode_length:
+                        print(f"  segment {times[0] - head['start_timestamp']:.1f}s: dropped, poses invalid after the wrist clock correction")
+                        continue
+                    s = slice(s.start + a_, s.start + b_)
+                    times, widths = times[a_:b_], [w[a_:b_] for w in widths]
+                    poses = [p[a_:b_] for p in poses]
+                frame_shifts = [int(round((shift[0] - c) / float(dt))) for c in shift]
+                starts = [s.start + f + d for f, d in zip(video_start_frames, frame_shifts)]
+                if any(a_ < 0 or a_ + (s.stop - s.start) > x['n_frames'] for a_, x in zip(starts, demo_videos)):
+                    print(f"  segment {times[0] - head['start_timestamp']:.1f}s: dropped, outside a video after the correction")
+                    continue
+                if episodes is not None:
+                    demo_start_poses = [p[0] for p in poses]
+                    demo_end_poses = [p[-1] for p in poses]
                 used_time += (s.stop - s.start) * float(dt)
                 all_plans.append({
-                    'episode_timestamps': demo_timestamps[s],
+                    'episode_timestamps': times,
                     'grippers': [{
-                        'tcp_pose': tcp_poses[g][s],
-                        'gripper_width': gripper_widths[g][s],
+                        'tcp_pose': poses[g],
+                        'gripper_width': widths[g],
                         'demo_start_pose': demo_start_poses[g],
                         'demo_end_pose': demo_end_poses[g]
                     } for g in range(len(gripper_bodies))],
                     'cameras': [{
                         'video_path': str(x['dir'].joinpath('raw_video.mp4').relative_to(x['dir'].parent)),
-                        'video_start_end': (s.start + f, s.stop + f),
+                        'video_start_end': (a_, a_ + (s.stop - s.start)),
+                        # session clock time of the video's frame 0 (wrist clock correction applied)
+                        'frame0_time': float(x['start_timestamp'] + c),
+                        'clock_correction_ms': c * 1e3,
+                        # wrist IMU: video time = IMU time + offset (OpenICC camera-IMU calibration)
+                        'imu_time_offset': imu_time_offset(x),
                         # 07 masks the gripper only in wrist camera images
                         'is_wrist_camera': x['camera_serial'] != config['head_camera']
-                    } for x, f in zip(demo_videos, video_start_frames)]
+                    } for x, a_, c in zip(demo_videos, starts, shift)]
                 })
         if episodes is not None:
             for k, e in enumerate(episodes.get(head['name'], dict()).get('episodes', [])):

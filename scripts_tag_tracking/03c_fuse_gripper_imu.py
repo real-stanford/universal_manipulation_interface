@@ -9,6 +9,8 @@ Requires: tag_tracking.pkl with world cube poses (03_track_bodies.py,
 (T_cube_wrist, setup calibration), wrist demos/*/imu_data.json and
 tag_detection.pkl, audio_sync_offsets.json, and gripper_imu (camera-IMU
 calibration and IMU noise per wrist camera) in the tag tracking config.
+Wrist clocks: the audio sync start times corrected by tag_tracking/wrist_sync.json
+(03s_sync_wrists.py) when present.
 Adds to each head task video's tag_tracking.pkl, per gripper body:
 grippers[name] = {'time' (head video clock), 'T_world_wrist', 'covariance',
 'position_std', 'rotation_std', 'is_valid', 'head_measured', 'n_wrist_tags'}
@@ -36,6 +38,7 @@ from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_no
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.parallel import make_executor, submit_fuse
 from umi.tag_tracking.gripper_fusion import wrist_measurements, init_poses
+from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
 
 
 # %%
@@ -60,6 +63,10 @@ def main(input, config, max_head_gap, num_workers):
         for name, b in config['bodies'].items() if 'gripper_camera' in b)]
     videos = get_session_videos(session)
     executor = make_executor(num_workers)
+    sync_path = session.joinpath('tag_tracking', 'wrist_sync.json')
+    sync = json.load(sync_path.open('r')) if sync_path.is_file() else None
+    if sync is None:
+        print("no tag_tracking/wrist_sync.json (03s_sync_wrists.py): wrist clocks from the audio sync only")
 
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track_path = head['dir'].joinpath('tag_tracking.pkl')
@@ -67,6 +74,7 @@ def main(input, config, max_head_gap, num_workers):
         head_times = track['time']
         windows = track.get('windows', [(0, len(head_times))])
         track['grippers'] = dict()
+        corrections = wrist_corrections(sync, head['name'])
         for name in names:
             serial = config['bodies'][name]['gripper_camera']
             assert serial in config['gripper_imu'], f"no gripper_imu for camera {serial} ({name})"
@@ -78,17 +86,22 @@ def main(input, config, max_head_gap, num_workers):
 
             jobs = list()
             for wrist in overlapping(videos, head, serial):
-                offset = wrist['start_timestamp'] - head['start_timestamp']  # head clock = wrist clock + offset
                 detections = pickle.load(wrist['dir'].joinpath('tag_detection.pkl').open('rb'))
                 wrist_times = np.array([d['time'] for d in detections])
+                # wrist video frames on the head video clock: audio sync start + wrist sync correction
+                on_head = wrist_times + wrist['start_timestamp'] - head['start_timestamp']
+                if wrist['name'] in corrections:
+                    on_head = on_head + correction_seconds(corrections[wrist['name']], on_head)
+                elif sync is not None:
+                    print(f"  {name} {wrist['name']}: no wrist sync correction, audio sync only")
                 imu = load_imu(str(wrist['dir'].joinpath('imu_data.json')))
                 for a, b in windows:
-                    inside = np.flatnonzero((wrist_times + offset >= head_times[a]) & (wrist_times + offset <= head_times[b - 1]))
+                    inside = np.flatnonzero((on_head >= head_times[a]) & (on_head <= head_times[b - 1]))
                     if len(inside) < 2:
                         continue
                     frames = [{'time': float(wrist_times[i]), 'corners': {k: v['corners']
                         for k, v in detections[i]['tag_dict'].items() if k in T_env_tags}} for i in inside]
-                    measurements = wrist_measurements(wrist_times[inside] + offset, head_times, body['T_world_body'],
+                    measurements = wrist_measurements(on_head[inside], head_times, body['T_world_body'],
                         body['world_covariance'], body['is_valid_world'], T_cube_wrist, max_head_gap)
                     init = init_poses(len(inside), measurements)
                     if init is None:
@@ -97,7 +110,7 @@ def main(input, config, max_head_gap, num_workers):
                         continue
                     future = submit_fuse(executor, camera, frames, T_env_tags, config['tag_sizes'], wrist_noise,
                         imu, cam_imu['T_imu_cam'], cam_imu['time_offset'], imu_noise, init, measurements)
-                    jobs.append((wrist_times[inside] + offset, measurements, frames, future))
+                    jobs.append((on_head[inside], measurements, frames, future))
 
             parts = list()
             n_failed = 0

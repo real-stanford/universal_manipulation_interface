@@ -134,6 +134,16 @@ def video_messages(video_path: str, start_frame: int, stop_frame: int):
             yield index, to_annexb(bytes(packet), length_size, parameter_sets, packet.is_keyframe)
 
 
+def frame0_time(camera: dict, times: np.ndarray, dt: float) -> float:
+    """
+    Session clock time of the camera video's frame 0: from the plan (06, wrist
+    clock correction applied), else from the first step (plans without it).
+    """
+    if 'frame0_time' in camera:
+        return camera['frame0_time']
+    return float(times[0] - camera['video_start_end'][0] * dt)
+
+
 def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video_fps, tcps_in_camera):
     times = np.asarray(plan_episode['episode_timestamps'], dtype=np.float64)
     dt = float(np.median(np.diff(times))) if len(times) > 1 else 1 / video_fps
@@ -168,10 +178,10 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             camera = cameras[g]
             video_dir = demos_dir.joinpath(camera['video_path']).parent
             imu = load_imu(str(video_dir.joinpath('imu_data.json')))
-            # time of video frame 0 of this camera on the session clock
-            t_frame0 = times[0] - camera['video_start_end'][0] * dt
+            # wrist IMU on the session clock: video frame 0 (wrist clock correction applied by 06)
+            # + IMU time + camera-IMU offset (video time = IMU time + offset)
             imu_channel = channel(f'robot{g}/imu', 'umi.msg.ImuSample')
-            imu_times = t_frame0 + imu['time']
+            imu_times = frame0_time(camera, times, dt) + imu['time'] + (camera.get('imu_time_offset') or 0.0)
             inside = (imu_times >= times[0]) & (imu_times <= times[-1] + dt)
             for t, a, w in zip(imu_times[inside], imu['accel'][inside], imu['gyro'][inside]):
                 write(imu_channel, t, {'timestamp': stamp(t), 'linear_acceleration': list(map(float, a)),
@@ -186,7 +196,7 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
                     image_size = (container.streams.video[0].width, container.streams.video[0].height)
             video = channel(f'/cameras/camera{c}/video', 'foxglove.CompressedVideo', {'stream_type': 'color'})
             for index, data in video_messages(str(video_path), start, stop):
-                t = times[0] + (index - start) * dt
+                t = frame0_time(camera, times, dt) + index * dt
                 write(video, t, {'timestamp': stamp(t), 'frame_id': f'camera{c}', 'format': 'h265',
                     'data': base64.b64encode(data).decode()})
 

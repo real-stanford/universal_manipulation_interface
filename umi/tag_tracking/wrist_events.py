@@ -40,16 +40,24 @@ camera's raw tag detections, without tag tracking:
 - episode: between two idle periods, from the first to the last bang that is
   at least idle_margin seconds away from both idle periods (lifting off and
   setting down on the dock happen at the idle boundaries).
+- wrist clock sync: the audio sync gives each video one offset for the
+  whole take, but the GoPro clocks drift (task3: wrist to wrist 14 -> 34 ms
+  over 28 min). Every wrist camera also hears each bang's click: per bang,
+  click_offset locates the head audio around the head click in the wrist
+  audio by envelope cross-correlation (the same sound by its shape, not the
+  loudest one: the wrist microphone also hears the fingers and handling).
+  Audio against audio, as the audio sync: the cameras' fixed audio delays
+  cancel. Per wrist video, wrist_clock_line fits a robust line through these
+  offsets over the take (bangs correlating below sync_min_correlation are not
+  used, mismatches are outliers); its value at an episode is the episode's
+  clock correction, the RMS of the inliers around it the sync accuracy.
 
-Defaults validated on 2026-11-16 task1 (13 min, 29 dock cycles): all 29
-episodes found, bang to bang, dock jolts excluded.
-
-All times are seconds on the head video's clock (its frame times in tag_corners.pkl).
 """
 from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import scipy.ndimage
 import scipy.signal
+import scipy.stats
 
 DEFAULTS = {
     'still_sec': 1.0,
@@ -67,6 +75,8 @@ DEFAULTS = {
     'dock_window': 0.25,
     'dock_distance': 0.35,
     'min_dock_frames': 15,
+    'sync_search': 0.1,
+    'sync_min_correlation': 0.5,
 }
 
 
@@ -183,6 +193,141 @@ def estimate_audio_lag(spike_times: np.ndarray, click_times: np.ndarray, search:
         return None, len(lags)
     a, b, _ = robust_line(np.array(times), np.array(lags), min_points=min_pairs)
     return (a, b), len(lags)
+
+
+def bang_click(times: np.ndarray, ratio: np.ndarray, t: float, search: float, min_ratio: float) -> Optional[float]:
+    """
+    Time of the strongest audio click within +-search of t (ratio >= min_ratio), None if none.
+    """
+    a, b = np.searchsorted(times, [t - search, t + search])
+    if b <= a:
+        return None
+    k = a + int(np.argmax(ratio[a:b]))
+    return float(times[k]) if ratio[k] >= min_ratio else None
+
+
+# head audio around the head click used to find the same sound in a wrist recording
+CLICK_TEMPLATE_SEC = (-0.01, 0.03)
+CLICK_ENVELOPE_SEC = 0.0005
+CLICK_FILTER_PAD_SEC = 0.01
+
+
+def click_envelope(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """
+    High-pass (> AUDIO_HIGHPASS_HZ) amplitude envelope, smoothed over CLICK_ENVELOPE_SEC.
+    """
+    sos = scipy.signal.butter(4, AUDIO_HIGHPASS_HZ, 'highpass', fs=sample_rate, output='sos')
+    envelope = np.abs(scipy.signal.sosfilt(sos, audio.astype(np.float64)))
+    return scipy.ndimage.uniform_filter1d(envelope, max(1, int(round(CLICK_ENVELOPE_SEC * sample_rate))))
+
+
+def click_offset(head_audio: np.ndarray, head_audio_start: float, wrist_audio: np.ndarray,
+        wrist_audio_start: float, sample_rate: int, t_click: float, search: float) -> Optional[Tuple[float, float]]:
+    """
+    Clock offset of a wrist recording at one bang: the head audio envelope
+    around the head click (CLICK_TEMPLATE_SEC) is located in the wrist audio
+    envelope within +-search by normalized cross-correlation (sub-sample peak).
+    *_audio_start: head video clock time of each recording's first sample.
+    Returns (offset, correlation): offset (s) = head clock time - wrist clock
+    time of the same sound, i.e. what to add to the wrist video's times; None
+    if the windows are outside a recording.
+    """
+    pad = CLICK_FILTER_PAD_SEC
+
+    def segment(audio, audio_start, t0, t1):
+        i0 = int(round((t0 - pad - audio_start) * sample_rate))
+        i1 = int(round((t1 + pad - audio_start) * sample_rate))
+        if i0 < 0 or i1 > len(audio):
+            return None
+        n = int(round(pad * sample_rate))
+        envelope = click_envelope(audio[i0:i1], sample_rate)
+        return envelope[n:len(envelope) - n], audio_start + (i0 + n) / sample_rate
+
+    template = segment(head_audio, head_audio_start, t_click + CLICK_TEMPLATE_SEC[0], t_click + CLICK_TEMPLATE_SEC[1])
+    window = segment(wrist_audio, wrist_audio_start, t_click + CLICK_TEMPLATE_SEC[0] - search,
+        t_click + CLICK_TEMPLATE_SEC[1] + search)
+    if template is None or window is None:
+        return None
+    (tpl, tpl_start), (win, win_start) = template, window
+    tpl = tpl - tpl.mean()
+    n = len(tpl)
+    if len(win) < n + 2 or not np.any(tpl):
+        return None
+    corr = scipy.signal.correlate(win, tpl, mode='valid')
+    sums = np.cumsum(np.concatenate([[0.0], win]))
+    sums2 = np.cumsum(np.concatenate([[0.0], win ** 2]))
+    s, s2 = sums[n:] - sums[:-n], sums2[n:] - sums2[:-n]
+    ncc = corr / (np.sqrt(np.maximum(s2 - s * s / n, 1e-30)) * np.linalg.norm(tpl))
+    k = int(np.argmax(ncc))
+    delta = 0.0
+    if 0 < k < len(ncc) - 1:
+        denominator = ncc[k - 1] - 2 * ncc[k] + ncc[k + 1]
+        if denominator < 0:
+            delta = 0.5 * (ncc[k - 1] - ncc[k + 1]) / denominator
+    wrist_time = win_start + (k + delta) / sample_rate
+    return float(tpl_start - wrist_time), float(ncc[k])
+
+
+def robust_drift_line(t: np.ndarray, y: np.ndarray, use: np.ndarray, n_mad: float = 3.0,
+        min_sigma: float = 1e-4) -> Tuple[float, float, np.ndarray]:
+    """
+    Line y = a + b * t through the used points, robust to a large share of
+    outliers (other sounds matched): Theil-Sen start (median of pairwise
+    slopes), then points within n_mad robust standard deviations are refitted
+    by least squares, twice. Returns (a, b, inlier mask).
+    """
+    if use.sum() >= 3:
+        b, a, _, _ = scipy.stats.theilslopes(y[use], t[use])
+    else:
+        b, a = 0.0, float(np.median(y[use]))
+    inlier = use.copy()
+    for _ in range(2):
+        residual = y - (a + b * t)
+        sigma = 1.4826 * np.median(np.abs(residual[use]))
+        inlier = use & (np.abs(residual) <= n_mad * max(sigma, min_sigma))
+        if inlier.sum() >= 3:
+            b, a = np.polyfit(t[inlier], y[inlier], 1)
+        elif inlier.sum() > 0:
+            b, a = 0.0, float(np.median(y[inlier]))
+    residual = y - (a + b * t)
+    sigma = 1.4826 * np.median(np.abs(residual[use]))
+    inlier = use & (np.abs(residual) <= n_mad * max(sigma, min_sigma))
+    return float(a), float(b), inlier
+
+
+def wrist_clock_line(times: Sequence[float], offsets: Sequence[float], correlations: Sequence[float],
+        min_correlation: float, n_mad: float = 3.0) -> Optional[dict]:
+    """
+    Clock offset of one wrist video over the take from its per-bang offsets
+    (click_offset): a robust line offset(t) = a + b * t (GoPro clocks drift
+    smoothly) through the bangs with correlation >= min_correlation; bangs
+    beyond n_mad robust standard deviations (another sound matched) are outliers.
+    residual_ms: RMS of the inliers around the line, the sync accuracy.
+    None with fewer than 2 usable bangs.
+    """
+    t, y, c = (np.asarray(x, dtype=float) for x in (times, offsets, correlations))
+    use = c >= min_correlation
+    if use.sum() < 2:
+        return None
+    a, b, inlier = robust_drift_line(t, y, use, n_mad)
+    residual = y - (a + b * t)
+    return {
+        'offset_ms': float(a * 1e3),
+        'drift_ms_per_min': float(b * 60e3),
+        'n_bangs': int(len(t)),
+        'n_used': int(use.sum()),
+        'n_inliers': int(inlier.sum()),
+        'residual_ms': float(np.sqrt(np.mean(residual[inlier] ** 2)) * 1e3),
+        'bangs': [{'time': float(ti), 'offset_ms': float(yi * 1e3), 'correlation': float(ci), 'inlier': bool(ii)}
+            for ti, yi, ci, ii in zip(t, y, c, inlier)]
+    }
+
+
+def wrist_clock_offset_ms(line: dict, t: float) -> float:
+    """
+    Offset (ms) of the wrist video at head video time t from wrist_clock_line.
+    """
+    return line['offset_ms'] + line['drift_ms_per_min'] * t / 60.0
 
 
 def max_near(times: np.ndarray, values: np.ndarray, t: float, tolerance: float) -> float:

@@ -9,7 +9,8 @@ os.chdir(ROOT_DIR)
 # %%
 import numpy as np
 from umi.tag_tracking.wrist_events import (DEFAULTS, runs, still_mask, accel_highpass, accel_peaks,
-    joint_spikes, merge_bangs, audio_onset_ratio, max_near, docked_view, idle_periods, episodes_from_events)
+    joint_spikes, merge_bangs, audio_onset_ratio, max_near, docked_view, idle_periods, episodes_from_events,
+    bang_click, click_offset, wrist_clock_line, wrist_clock_offset_ms)
 
 RATE = 200.0
 
@@ -145,6 +146,64 @@ def test_frame_labels():
     assert frame_labels(times, result) == ['IDLE', 'BANG', 'EPISODE 1', 'BANG', '', 'REJECTED (no_bang)']
 
 
+def test_wrist_clock_sync():
+    """
+    Head and wrist microphones hear the same bang clicks; the wrist recording's
+    clock drifts. Near every click the wrist also hears a louder, different
+    sound (fingers, handling). Per-bang offsets by envelope cross-correlation
+    and the drift line recover the clock error; a wrong bang is an outlier.
+    """
+    rate = 48000
+    rng = np.random.default_rng(3)
+    duration = 120.0
+    bangs = np.arange(5.0, 116.0, 10.0)
+    # wrist clock error (s): the wrist recording places a sound error(t) earlier than the head
+    error = lambda t: 0.014 + 0.0007 * t / 60.0
+    n = int(duration * rate)
+    head = rng.normal(scale=0.01, size=n).astype(np.float32)
+    wrist = rng.normal(scale=0.01, size=n).astype(np.float32)
+    decay = np.exp(-np.arange(240) / 40.0)
+    for t in bangs:
+        click = rng.normal(size=240) * decay   # each bang sounds different
+        i = int(round(t * rate))
+        head[i:i + 240] += 0.5 * click        # farther from the head microphone
+        j = int(round((t - error(t)) * rate))
+        wrist[j:j + 240] += click
+        # louder handling sound 40 ms later at the wrist
+        k = j + int(0.04 * rate)
+        wrist[k:k + 2400] += 3.0 * rng.normal(size=2400) * np.exp(-np.arange(2400) / 800.0)
+    head_times, head_ratio = audio_onset_ratio(head, rate, 0.0)
+    head_clicks = [bang_click(head_times, head_ratio, t, 0.015, 5.0) for t in bangs]
+    assert all(h is not None and abs(h - t) < 0.004 for h, t in zip(head_clicks, bangs)), head_clicks
+
+    measured = [click_offset(head, 0.0, wrist, 0.0, rate, h, 0.1) for h in head_clicks]
+    for t, (offset, correlation) in zip(bangs, measured):
+        assert abs(offset - error(t)) < 0.0002, (t, offset, error(t))
+        assert correlation > 0.8, correlation
+    offsets = [m[0] for m in measured]
+    correlations = [m[1] for m in measured]
+    # one bang matched to another sound
+    offsets[3] += 0.03
+    line = wrist_clock_line(bangs, offsets, correlations, 0.5)
+    assert line['n_inliers'] == len(bangs) - 1 and not line['bangs'][3]['inlier'], line
+    for t in [0.0, 60.0, 120.0]:
+        assert abs(wrist_clock_offset_ms(line, t) - error(t) * 1e3) < 0.2, (t, wrist_clock_offset_ms(line, t))
+    assert line['residual_ms'] < 0.2, line['residual_ms']
+    # short video with 30% wrong matches (task3 first left video): still the true line
+    t_short = np.arange(10.0, 420.0, 20.0)
+    y_short = 0.003 + np.random.default_rng(5).normal(scale=0.001, size=len(t_short))
+    wrong = [1, 4, 6, 9, 13, 17]
+    y_short[wrong] = [0.085, -0.078, -0.035, -0.023, -0.017, 0.029]
+    line = wrist_clock_line(t_short, y_short, np.ones(len(t_short)), 0.5)
+    assert set(np.flatnonzero([not b['inlier'] for b in line['bangs']])) == set(wrong), line['bangs']
+    assert abs(line['drift_ms_per_min']) < 0.3 and abs(line['offset_ms'] - 3.0) < 1.0, line
+    assert line['residual_ms'] < 1.5, line['residual_ms']
+    # low correlation bangs are not used; fewer than 2 usable: no line
+    assert wrist_clock_line(bangs[:2], offsets[:2], [0.9, 0.1], 0.5) is None
+    # outside the recording: no measurement
+    assert click_offset(head, 0.0, wrist, 0.0, rate, duration - 0.01, 0.1) is None
+
+
 def test():
     test_runs()
     test_still_and_bangs()
@@ -152,6 +211,7 @@ def test():
     test_docked_view()
     test_episodes()
     test_frame_labels()
+    test_wrist_clock_sync()
     print('all passed')
 
 
