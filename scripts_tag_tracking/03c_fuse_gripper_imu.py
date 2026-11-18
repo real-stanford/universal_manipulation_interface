@@ -34,7 +34,7 @@ import click
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.noise_model import TagNoiseModel
-from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise
+from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, load_imu_noise, wrist_imu_time_offset
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.parallel import make_executor, submit_fuse
 from umi.tag_tracking.windows import split_window
@@ -106,6 +106,10 @@ def main(input, config, max_head_gap, num_workers, chunk_sec, context_sec):
                 elif sync is not None:
                     print(f"  {name} {wrist['name']}: no wrist sync correction, audio sync only")
                 imu = load_imu(str(wrist['dir'].joinpath('imu_data.json')))
+                time_offset = wrist_imu_time_offset(config['gripper_imu'][serial], cam_imu,
+                    str(wrist['dir'].joinpath('raw_video.mp4')), float(1 / wrist['fps']))
+                print(f"  {name} {wrist['name']}: IMU time offset {time_offset * 1e3:+.2f} ms "
+                    f"({config['gripper_imu'][serial].get('imu_time_offset', 'openicc')})")
                 for a, b in windows:
                     for lo, hi, keep_lo, keep_hi in split_window(head_times, a, b, chunk_sec, context_sec):
                         inside = np.flatnonzero((on_head >= head_times[lo]) & (on_head <= head_times[hi - 1]))
@@ -126,7 +130,7 @@ def main(input, config, max_head_gap, num_workers, chunk_sec, context_sec):
                                 f"no head measurement, skipped")
                             continue
                         submissions.append((len(inside), name, t, measurements, frames, keep, (camera, frames, T_env_tags,
-                            config['tag_sizes'], wrist_noise, imu, cam_imu['T_imu_cam'], cam_imu['time_offset'],
+                            config['tag_sizes'], wrist_noise, imu, cam_imu['T_imu_cam'], time_offset,
                             imu_noise, init, measurements)))
         for size, name, t, measurements, frames, keep, args in sorted(submissions, key=lambda x: -x[0]):
             jobs[name].append((t, measurements, frames, keep, submit_fuse(executor, *args)))

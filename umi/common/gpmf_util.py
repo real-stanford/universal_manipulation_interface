@@ -110,3 +110,16 @@ def stream_keys(mp4_path: str, n_payloads: int = 1) -> List[List[str]]:
                 if strm['key'] == 'STRM':
                     out.append([c['key'] for c in strm['children']])
     return out
+
+
+def video_frame0_time(mp4_path: str, frame_duration: float) -> float:
+    """
+    Camera clock time (s, the STMP clock of the sensor streams) of the video's
+    first frame, from a per-frame stream (CORI, else MSKP): its first payload's
+    STMP minus the frames before it. imu_data.json times are this clock (STMP),
+    so an IMU sample at time c is at video time c - video_frame0_time.
+    """
+    timing = stream_timing(mp4_path, ('CORI', 'MSKP'))
+    d = timing.get('CORI', timing.get('MSKP'))
+    assert d is not None and d['stmp_us'][0] >= 0, f"{mp4_path}: no per-frame GPMF stream with STMP"
+    return d['stmp_us'][0] * 1e-6 - (d['tsmp'][0] - d['n'][0]) * frame_duration

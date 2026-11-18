@@ -62,3 +62,20 @@ def load_imu_noise(orb_slam_setting_yaml: str) -> Dict[str, float]:
     fs.release()
     assert all(v > 0 for v in out.values()), f"IMU noise missing in {orb_slam_setting_yaml}"
     return out
+
+
+def wrist_imu_time_offset(entry: Dict, cam_imu: Dict, video_path: str, frame_duration: float) -> float:
+    """
+    Wrist camera time = IMU time + offset (s) for one wrist video, by the
+    gripper_imu config entry's imu_time_offset: 'openicc' (default, the
+    camera-IMU calibration's time_offset), 'gpmf' (the GoPro timestamps taken
+    literally: minus the camera clock time of the video's first frame,
+    umi.common.gpmf_util.video_frame0_time) or a number (s).
+    """
+    mode = entry.get('imu_time_offset', 'openicc')
+    if mode == 'openicc':
+        return float(cam_imu['time_offset'])
+    if mode == 'gpmf':
+        from umi.common.gpmf_util import video_frame0_time
+        return -video_frame0_time(video_path, frame_duration)
+    return float(mode)

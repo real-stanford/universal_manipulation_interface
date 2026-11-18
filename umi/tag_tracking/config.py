@@ -14,6 +14,7 @@ gripper_imu:                          # optional, per wrist camera, for 03c_fuse
   C3501326029433:
     cam_imu_calibration: right_cam_imu_calib_result.json
     noise_setting: right_setting.yaml
+    imu_time_offset: openicc          # optional: openicc (calibration), gpmf (GoPro timestamps) or seconds
 accuracy:                             # pose accepted if its std is within these
   position_std: 0.0061                # m
   rotation_std: 3.5                   # deg
@@ -94,8 +95,14 @@ def load_tag_tracking_config(path: str) -> dict:
         config['head_imu'] = {k: resolve(v) for k, v in config['head_imu'].items()}
 
     if 'gripper_imu' in config:
-        config['gripper_imu'] = {str(serial): {k: resolve(v) for k, v in x.items()}
-            for serial, x in config['gripper_imu'].items()}
+        config['gripper_imu'] = {str(serial): {k: (resolve(v) if k in ('cam_imu_calibration', 'noise_setting') else v)
+            for k, v in x.items()} for serial, x in config['gripper_imu'].items()}
+        for serial, x in config['gripper_imu'].items():
+            mode = x.get('imu_time_offset', 'openicc')
+            assert mode in ('openicc', 'gpmf') or isinstance(mode, (int, float)), \
+                f"gripper_imu {serial}: imu_time_offset must be openicc, gpmf or seconds"
+            assert set(x) <= {'cam_imu_calibration', 'noise_setting', 'imu_time_offset'}, \
+                f"gripper_imu {serial}: unknown keys {set(x) - {'cam_imu_calibration', 'noise_setting', 'imu_time_offset'}}"
         wrist_serials = {b['gripper_camera'] for b in gripper_bodies.values()}
         assert set(config['gripper_imu']) <= wrist_serials, "gripper_imu cameras must be gripper cameras"
 

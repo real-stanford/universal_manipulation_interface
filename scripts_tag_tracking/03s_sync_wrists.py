@@ -43,7 +43,7 @@ import click
 import numpy as np
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
-from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration
+from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, wrist_imu_time_offset
 from umi.tag_tracking.wrist_sync import (DEFAULTS, cube_image_rows, sync_episodes, drift_line, fit_readout,
     observation_times, head_readout)
 
@@ -96,12 +96,16 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
             for wrist in overlapping(videos, head, serial):
                 imu = load_imu(str(wrist['dir'].joinpath('imu_data.json')))
                 # wrist IMU -> wrist video (OpenICC offset) -> head video clock (audio sync start times)
-                gyro_times = imu['time'] + cam_imu['time_offset'] + wrist['start_timestamp'] - head['start_timestamp']
+                time_offset = wrist_imu_time_offset(config['gripper_imu'][serial], cam_imu,
+                    str(wrist['dir'].joinpath('raw_video.mp4')), float(1 / wrist['fps']))
+                print(f"  {name} {wrist['name']}: IMU time offset {time_offset * 1e3:+.2f} ms "
+                    f"({config['gripper_imu'][serial].get('imu_time_offset', 'openicc')})")
+                gyro_times = imu['time'] + time_offset + wrist['start_timestamp'] - head['start_timestamp']
                 gyro_cube = imu['gyro'] @ R_cube_imu.T
                 fits = sync_episodes(times, obs, rows, T, valid, head_episodes, gyro_times, gyro_cube, params)
                 line = drift_line(fits)
                 results[wrist['name']] = {'gripper': name, 'robot_index': config['bodies'][name]['robot_index'],
-                    'line': line, 'start': wrist['start_timestamp'], 'end': wrist['end_timestamp']}
+                    'line': line, 'imu_time_offset_ms': time_offset * 1e3, 'start': wrist['start_timestamp'], 'end': wrist['end_timestamp']}
                 # readout check: the same episodes without the rolling shutter
                 for e, f in sync_episodes(times, obs0, rows, T, valid, head_episodes, gyro_times, gyro_cube, params):
                     if f is not None:

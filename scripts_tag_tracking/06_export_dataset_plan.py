@@ -58,7 +58,7 @@ from umi.common.interpolation_util import PoseInterpolator, get_interp1d
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.session import get_session_videos, overlapping
 from umi.tag_tracking.wrist_sync import wrist_corrections, correction_seconds
-from umi.tag_tracking.imu import load_cam_imu_calibration
+from umi.tag_tracking.imu import load_cam_imu_calibration, wrist_imu_time_offset
 from umi.tag_tracking.delivery import load_gripper_range, finger_widths
 
 
@@ -161,7 +161,9 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
             serial = video['camera_serial']
             if serial == config['head_camera'] or serial not in config.get('gripper_imu', dict()):
                 return None
-            return float(load_cam_imu_calibration(config['gripper_imu'][serial]['cam_imu_calibration'])['time_offset'])
+            cam_imu = load_cam_imu_calibration(config['gripper_imu'][serial]['cam_imu_calibration'])
+            return wrist_imu_time_offset(config['gripper_imu'][serial], cam_imu,
+                str(video['dir'].joinpath('raw_video.mp4')), float(1 / video['fps']))
 
         def correction(video, t_session):
             """
