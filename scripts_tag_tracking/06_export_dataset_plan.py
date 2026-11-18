@@ -104,6 +104,19 @@ def interpolate_valid_poses(times, poses, is_valid, query_times, max_gap_sec=Non
         out[query_valid] = interp(query_times[query_valid])
     return out, query_valid
 
+def bridged_gaps(times, is_valid, query_times):
+    """
+    Per query time, the time between the valid samples around it, and whether
+    that spans lost samples (more than 1.5 sample periods): the pose there is
+    interpolated across a tracking gap, not measured.
+    """
+    valid_times = times[is_valid]
+    idx = np.clip(np.searchsorted(valid_times, query_times), 1, max(len(valid_times) - 1, 1))
+    span = valid_times[idx] - valid_times[idx - 1] if len(valid_times) >= 2 else np.full(len(query_times), np.inf)
+    period = np.median(np.diff(times)) if len(times) >= 2 else np.inf
+    return span, span > 1.5 * period
+
+
 def load_gripper_width_interpolator(session, serial):
     with ExifTool() as et:
         for path in session.glob('demos/gripper_calibration*/gripper_range.json'):
@@ -155,6 +168,7 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
     all_plans = list()
     total_time = 0.0
     used_time = 0.0
+    bridge_stats = [{'steps': 0, 'bridged': 0, 'longest': 0.0} for _ in gripper_bodies]
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         head_times = head['start_timestamp'] + track['time']
@@ -355,6 +369,13 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                     s = slice(s.start + a_, s.start + b_)
                     times, widths = times[a_:b_], [w[a_:b_] for w in widths]
                     poses = [p[a_:b_] for p in poses]
+                # steps whose pose is interpolated across lost tracking (not measured), per gripper
+                gaps = [bridged_gaps(pose_inputs[g][0], pose_inputs[g][2], times) for g in range(len(gripper_bodies))]
+                for g, (span, bridged) in enumerate(gaps):
+                    bridge_stats[g]['steps'] += len(times)
+                    bridge_stats[g]['bridged'] += int(bridged.sum())
+                    if bridged.any():
+                        bridge_stats[g]['longest'] = max(bridge_stats[g]['longest'], float(span[bridged].max()))
                 frame_shifts = [int(round((shift[0] - c) / float(dt))) for c in shift]
                 starts = [s.start + f + d for f, d in zip(video_start_frames, frame_shifts)]
                 if any(a_ < 0 or a_ + (s.stop - s.start) > x['n_frames'] for a_, x in zip(starts, demo_videos)):
@@ -369,6 +390,8 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                     'grippers': [{
                         'tcp_pose': poses[g],
                         'gripper_width': widths[g],
+                        # True where the pose is interpolated across a tracking gap (up to max_gap_sec)
+                        'pose_bridged': gaps[g][1],
                         'demo_start_pose': demo_start_poses[g],
                         'demo_end_pose': demo_end_poses[g]
                     } for g in range(len(gripper_bodies))],
@@ -392,6 +415,9 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
 
     print(f"{len(all_plans)} episodes, {used_time:.1f}s of {total_time:.1f}s used "
         f"({used_time / max(total_time, 1e-9) * 100:.0f}%)")
+    for (_, name), x in zip(gripper_bodies, bridge_stats):
+        print(f"  {name}: pose interpolated across lost tracking (not measured) in {x['bridged']} of {x['steps']} steps "
+            f"({x['bridged'] / max(x['steps'], 1) * 100:.2f}%), longest gap {x['longest'] * 1e3:.0f} ms")
     pickle.dump(all_plans, open(output, 'wb'))
     print(f"Saved to {output}")
 
