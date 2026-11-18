@@ -1,5 +1,5 @@
 {
-  "source_session": "20261116/task1",
+  "source_session": "/home/humyn-labs/Videos/20261116/task1",
   "head_mapping_videos": [
     "head_mapping_C3501326502664_2026.11.16_16.53.16.285550"
   ],
@@ -32,12 +32,13 @@
     "left_cube": []
   },
   "variance_factor": {
-    "environment": 9.976694756093751,
-    "right_cube": 4.937534871420444,
-    "left_cube": 3.4701622605660765
+    "environment": 12.798039421960274,
+    "right_cube": 4.658586242905822,
+    "left_cube": 2.902498546576107
   },
-  "line_delay_us": 0.0,
+  "line_delay_us": 5.424063116370808,
   "readout_ms": 11.0,
+  "wrist_clocks": "audio sync + motion sync (/home/humyn-labs/Videos/20261116/task1/tag_tracking/wrist_sync.json)",
   "T_wrist_tcp": {
     "right_cube": [
       [
@@ -96,32 +97,32 @@
     "right_cube": {
       "n_candidates": 7754,
       "n_sampled": 600,
-      "n_wrist_invalid": 431,
-      "n_head_invalid": 21,
-      "n_too_fast": 61,
-      "n_estimates": 87,
-      "n_inliers": 86,
-      "spread_mm": 5.432180470888342,
-      "spread_deg": 0.7650484452992019,
-      "std_error_mm": 1.1617833512855722,
-      "std_error_deg": 0.09979617129966005,
-      "median_cube_speed": 0.17153467671505016,
-      "distance_cube_to_wrist_mm": 86.83580941790653
+      "n_wrist_invalid": 451,
+      "n_head_invalid": 20,
+      "n_too_fast": 52,
+      "n_estimates": 77,
+      "n_inliers": 70,
+      "spread_mm": 4.8438897069422495,
+      "spread_deg": 0.7978073209030092,
+      "std_error_mm": 1.1161561370063737,
+      "std_error_deg": 0.11630361043204107,
+      "median_cube_speed": 0.17436634829440548,
+      "distance_cube_to_wrist_mm": 85.98377173517183
     },
     "left_cube": {
       "n_candidates": 3991,
       "n_sampled": 600,
-      "n_wrist_invalid": 420,
-      "n_head_invalid": 23,
-      "n_too_fast": 80,
-      "n_estimates": 77,
-      "n_inliers": 77,
-      "spread_mm": 3.6530987392040792,
-      "spread_deg": 0.5318177762574696,
-      "std_error_mm": 0.5298993564009573,
-      "std_error_deg": 0.0814489892014102,
-      "median_cube_speed": 0.17626338585423068,
-      "distance_cube_to_wrist_mm": 133.95108295194922
+      "n_wrist_invalid": 440,
+      "n_head_invalid": 13,
+      "n_too_fast": 78,
+      "n_estimates": 69,
+      "n_inliers": 68,
+      "spread_mm": 4.233691115859275,
+      "spread_deg": 0.6432648923197588,
+      "std_error_mm": 0.5777436446514985,
+      "std_error_deg": 0.09090824250657369,
+      "median_cube_speed": 0.18263737649034878,
+      "distance_cube_to_wrist_mm": 133.68465136688502
     }
   }
 }
