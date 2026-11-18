@@ -122,7 +122,7 @@ def main(input, config):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     assert 'episodes' in config, "tag tracking config needs an episodes section"
-    params = {k: v for k, v in config['episodes'].items() if k not in ('dock_tags', 'max_gap_sec', 'dock_exit_distance')}
+    params = {k: v for k, v in config['episodes'].items() if k not in ('dock_tags', 'max_gap_sec', 'dock_exit_distance', 'fixed_trim_sec')}
     inputs = segment_step.take_inputs(config)
     output_dir = session.joinpath('tag_tracking', 'wrist_events')
     output_dir.mkdir(parents=True, exist_ok=True)

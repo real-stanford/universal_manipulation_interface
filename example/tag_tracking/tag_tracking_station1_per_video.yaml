@@ -1,7 +1,7 @@
 # Station1 sessions recorded one episode per video (cameras started / stopped per episode,
 # continuous work inside, e.g. the test tasks): same as tag_tracking_station1.yaml except
-# episodes.boundary: video. The task runs from leaving the dock / the first bang to the last
-# bang / returning to the dock (03t_trim_docking.py); bangs in between do not split it.
+# episodes.boundary: video and episodes.fixed_trim_sec: 5, the task is each video minus
+# 5 s at its start and end (03t_trim_docking.py), no dock or bang detection.
 # Tag tracking config for station1 (2026-11-18), see umi/tag_tracking/config.py.
 # New environment (head_mapping); yesterday's right gripper (cube 2-5, camera C3501326029433)
 # now in the left hand; a new right gripper (cube 8-11, fingers 6 / 7, camera C3501326500348).
@@ -58,6 +58,7 @@ bodies:
 episodes:
   dock_tags: [14, 16]
   boundary: video         # one episode per head video (see the header)
+  fixed_trim_sec: 5.0     # s removed at the start and end of each episode
   dock_exit_distance: 0.45  # m, task = both cubes farther than this from the dock tags
   # idle: both wrist IMUs still and the head sees both cubes at the dock tags
   still_sec: 1.0          # s, stillness window

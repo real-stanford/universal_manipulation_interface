@@ -48,8 +48,9 @@ from umi.tag_tracking.camera_model import FisheyeCamera
 from umi.tag_tracking.wrist_events import DEFAULTS as WRIST_EVENT_DEFAULTS
 
 
-# max_gap_sec: export; dock_exit_distance: 03t_trim_docking.py (cube to nearest dock tag, m)
-EPISODE_DEFAULTS = {**WRIST_EVENT_DEFAULTS, 'max_gap_sec': 0.25, 'dock_exit_distance': 0.45}
+# max_gap_sec: export; dock_exit_distance: 03t_trim_docking.py (cube to nearest dock tag, m);
+# fixed_trim_sec: 03t_trim_docking.py, if set the task is the episode minus this much at each end
+EPISODE_DEFAULTS = {**WRIST_EVENT_DEFAULTS, 'max_gap_sec': 0.25, 'dock_exit_distance': 0.45, 'fixed_trim_sec': None}
 
 
 def load_tag_tracking_config(path: str) -> dict:

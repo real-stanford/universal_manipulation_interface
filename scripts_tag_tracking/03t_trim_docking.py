@@ -19,6 +19,10 @@ dock removing more than the take's usual docking + bang ritual + 2 s, to check)
 to every episode of tag_tracking/episodes.json;
 06_export_dataset_plan.py exports that interval.
 
+With episodes.fixed_trim_sec in the config (e.g. one episode per video,
+episodes.boundary: video), the task is simply the episode minus that many
+seconds at each end ('task_boundary' 'fixed'), no dock or bang detection.
+
 python scripts_tag_tracking/03t_trim_docking.py -i data_workspace/session -c umi_calib/tag_tracking.yaml
 """
 # %%
@@ -61,6 +65,7 @@ def main(input, config, bang_ritual):
     config = load_tag_tracking_config(config)
     assert 'episodes' in config, "tag tracking config needs an episodes section"
     exit_distance = config['episodes']['dock_exit_distance']
+    fixed_trim = config['episodes']['fixed_trim_sec']
     dock_tags = config['episodes']['dock_tags']
     calibration = json.load(session.joinpath('tag_tracking', 'bodies.json').open('r'))
     static = [b for b in calibration['bodies'].values() if b['static']][0]
@@ -83,14 +88,20 @@ def main(input, config, bang_ritual):
         video = data['videos'][head['name']]
         durations = list()
         for k, e in enumerate(video['episodes']):
-            interval = task_interval(times, positions, dock_positions, e['start'], e['end'], exit_distance)
-            sources = ['dock', 'dock']
-            if interval is not None and bang_ritual:
+            if fixed_trim is not None:
+                interval = (e['start'] + fixed_trim, e['end'] - fixed_trim)
+                interval = interval if interval[1] > interval[0] else None
+                sources = ['fixed', 'fixed']
+            else:
+                interval = task_interval(times, positions, dock_positions, e['start'], e['end'], exit_distance)
+                sources = ['dock', 'dock']
+            if interval is not None and bang_ritual and fixed_trim is None:
                 interval, sources = between_bangs(interval, video['bangs'], (e['start'], e['end']))
             e['task_start'], e['task_end'] = (None, None) if interval is None else interval
             e['task_boundary'] = None if interval is None else sources
             if interval is None:
-                print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: cubes never left the dock area, no task")
+                print(f"  episode {k + 1} {mmss(e['start'])}-{mmss(e['end'])}: "
+                    + ("shorter than twice the fixed trim, no task" if fixed_trim is not None else "cubes never left the dock area, no task"))
                 continue
             durations.append(interval[1] - interval[0])
             e['task_removed'] = [interval[0] - e['start'], e['end'] - interval[1]]
