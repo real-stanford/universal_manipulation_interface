@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Sequence, Set
 import os
 import cv2
 import numpy as np
@@ -77,3 +77,26 @@ def detect_video_tag_corners(
     return process_video_chunked(video_path, make_corner_detector,
         (aruco_dict.bytesList, aruco_dict.markerSize, aruco_dict.maxCorrectionBits, tag_ids),
         num_workers=num_workers, desc=os.path.basename(os.path.dirname(os.path.abspath(video_path))))
+
+
+def tag_inventory(detections: Sequence[Dict[int, np.ndarray]], image_size: Sequence[int]) -> Dict[int, dict]:
+    """
+    Which tags a video shows, from per-frame detections (detect_tag_corners of
+    sampled frames): per tag id the share of frames it is in, its median side
+    length (px) and its median center in the image (0..1, x right, y down).
+    Finger tags sit at a fixed spot near the bottom of a wrist image, cube and
+    environment tags move around.
+    """
+    w, h = image_size
+    seen = dict()
+    for corners in detections:
+        for tag_id, c in corners.items():
+            side = float(np.mean(np.linalg.norm(c - np.roll(c, 1, axis=0), axis=1)))
+            center = c.mean(axis=0) / np.array([w, h])
+            seen.setdefault(int(tag_id), list()).append((side, center[0], center[1]))
+    out = dict()
+    for tag_id in sorted(seen):
+        x = np.array(seen[tag_id])
+        out[tag_id] = {'share': len(x) / max(len(detections), 1), 'side_px': float(np.median(x[:, 0])),
+            'center': (float(np.median(x[:, 1])), float(np.median(x[:, 2])))}
+    return out
