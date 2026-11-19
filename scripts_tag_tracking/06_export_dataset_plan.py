@@ -27,7 +27,12 @@ interval (task_start / task_end, 03t_trim_docking.py: docking removed) if presen
 - poses are interpolated across tracking gaps up to episodes.max_gap_sec;
 - invalid steps at an episode's start / end (the bang motions) are trimmed,
   at most --max_trim_sec per side; the rest must be fully valid, else the
-  episode is dropped (not split); demo_start_pose / demo_end_pose are per episode.
+  episode is dropped (not split); demo_start_pose / demo_end_pose are per episode;
+- --keep_gaps: episodes with longer gaps inside are kept whole instead; at
+  those steps the pose is not available: tcp_pose NaN, pose_valid False
+  (per gripper, every step). Such plans are for the per-frame deliveries
+  (07_export_mcap.py writes no pose message there), not for
+  07_generate_replay_buffer.py.
 Grippers are ordered by robot_index; cameras are the grippers' wrist
 cameras in that order, then optionally the head camera.
 
@@ -123,7 +128,9 @@ def bridged_gaps(times, is_valid, query_times):
 @click.option('-nh', '--no_head_camera', is_flag=True, default=False, help='Exclude head camera images')
 @click.option('-mt', '--max_trim_sec', type=float, default=1.0,
     help='Episodes: trim invalid steps at the start / end, at most this long per side (s)')
-def main(input, config, output, wrist_sync, reference, min_episode_length, no_head_camera, max_trim_sec):
+@click.option('-kg', '--keep_gaps', is_flag=True, default=False,
+    help='Episodes: keep episodes with tracking gaps over max_gap_sec inside, pose not available (NaN) there')
+def main(input, config, output, wrist_sync, reference, min_episode_length, no_head_camera, max_trim_sec, keep_gaps):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     if output is None:
         output = session.joinpath('dataset_plan.pkl')
@@ -151,7 +158,7 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
     all_plans = list()
     total_time = 0.0
     used_time = 0.0
-    bridge_stats = [{'steps': 0, 'bridged': 0, 'longest': 0.0} for _ in gripper_bodies]
+    bridge_stats = [{'steps': 0, 'bridged': 0, 'longest': 0.0, 'missing': 0} for _ in gripper_bodies]
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         head_times = head['start_timestamp'] + track['time']
@@ -307,9 +314,14 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                         continue
                     s = slice(in_episode[0] + trim_start, in_episode[-1] + 1 - trim_end)
                     if not is_step_valid[s].all():
-                        print(f"{label}: dropped, gaps over {max_gap_sec}s inside after trimming the edges "
-                            f"(poses valid in {is_step_valid[s].mean() * 100:.0f}% of steps)")
-                        continue
+                        gap_segments, gap_types = get_bool_segments(~is_step_valid[s])
+                        longest = max((g.stop - g.start) * step for g, is_gap in zip(gap_segments, gap_types) if is_gap)
+                        if not keep_gaps:
+                            print(f"{label}: dropped, gaps over {max_gap_sec}s inside after trimming the edges "
+                                f"(poses valid in {is_step_valid[s].mean() * 100:.0f}% of steps, longest gap {longest:.2f}s)")
+                            continue
+                        print(f"{label}: kept with pose not available in {(~is_step_valid[s]).mean() * 100:.1f}% "
+                            f"of steps ({int(sum(gap_types))} gaps over {max_gap_sec}s, longest {longest:.2f}s)")
                     if s.stop - s.start < min_episode_length:
                         print(f"{label}: dropped, {s.stop - s.start} steps after trimming")
                         continue
@@ -347,19 +359,25 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 valid = np.all(valids, axis=0)
                 if not valid.all():
                     # the shift (a few ms) can move an edge step out of a tracked stretch: trim it
+                    # (with keep_gaps, gaps inside stay: pose not available there)
                     ok = np.flatnonzero(valid)
                     a_, b_ = (ok[0], ok[-1] + 1) if len(ok) else (0, 0)
-                    if len(ok) == 0 or not valid[a_:b_].all() or a_ > 3 or len(valid) - b_ > 3 or b_ - a_ < min_episode_length:
+                    if len(ok) == 0 or (not keep_gaps and not valid[a_:b_].all()) \
+                            or a_ > 3 or len(valid) - b_ > 3 or b_ - a_ < min_episode_length:
                         print(f"  segment {times[0] - head['start_timestamp']:.1f}s: dropped, poses invalid after the wrist clock correction")
                         continue
                     s = slice(s.start + a_, s.start + b_)
                     times, widths = times[a_:b_], [w[a_:b_] for w in widths]
                     poses = [p[a_:b_] for p in poses]
+                    valids = [v[a_:b_] for v in valids]
                 # steps whose pose is interpolated across lost tracking (not measured), per gripper
                 gaps = [bridged_gaps(pose_inputs[g][0], pose_inputs[g][2], times) for g in range(len(gripper_bodies))]
                 for g, (span, bridged) in enumerate(gaps):
+                    bridged = bridged & valids[g]  # within max_gap_sec: interpolated; longer: not available
+                    gaps[g] = (span, bridged)
                     bridge_stats[g]['steps'] += len(times)
                     bridge_stats[g]['bridged'] += int(bridged.sum())
+                    bridge_stats[g]['missing'] += int((~valids[g]).sum())
                     if bridged.any():
                         bridge_stats[g]['longest'] = max(bridge_stats[g]['longest'], float(span[bridged].max()))
                 frame_shifts = [int(round((shift[0] - c) / float(dt))) for c in shift]
@@ -378,6 +396,8 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                         'gripper_width': widths[g],
                         # True where the pose is interpolated across a tracking gap (up to max_gap_sec)
                         'pose_bridged': gaps[g][1],
+                        # False where the pose is not available (gap over max_gap_sec, --keep_gaps): tcp_pose NaN
+                        'pose_valid': valids[g],
                         'demo_start_pose': demo_start_poses[g],
                         'demo_end_pose': demo_end_poses[g]
                     } for g in range(len(gripper_bodies))],
@@ -403,7 +423,9 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
         f"({used_time / max(total_time, 1e-9) * 100:.0f}%)")
     for (_, name), x in zip(gripper_bodies, bridge_stats):
         print(f"  {name}: pose interpolated across lost tracking (not measured) in {x['bridged']} of {x['steps']} steps "
-            f"({x['bridged'] / max(x['steps'], 1) * 100:.2f}%), longest gap {x['longest'] * 1e3:.0f} ms")
+            f"({x['bridged'] / max(x['steps'], 1) * 100:.2f}%), longest gap {x['longest'] * 1e3:.0f} ms"
+            + (f"; pose not available in {x['missing']} steps ({x['missing'] / max(x['steps'], 1) * 100:.2f}%)"
+                if keep_gaps else ''))
     pickle.dump(all_plans, open(output, 'wb'))
     print(f"Saved to {output}")
 

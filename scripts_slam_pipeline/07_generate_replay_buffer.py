@@ -106,6 +106,8 @@ def main(input, output, out_res, out_fov, compression_level,
             episode_data = dict()
             for gripper_id, gripper in enumerate(grippers):    
                 eef_pose = gripper['tcp_pose']
+                assert not np.isnan(eef_pose).any(), \
+                    "dataset_plan.pkl has steps without a pose (06_export_dataset_plan.py --keep_gaps); export it without --keep_gaps for training"
                 eef_pos = eef_pose[...,:3]
                 eef_rot = eef_pose[...,3:]
                 gripper_widths = gripper['gripper_width']

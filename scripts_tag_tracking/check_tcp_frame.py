@@ -124,7 +124,8 @@ def main(input, config, robot, time_sec, compare_tcp, head_video):
     if time_sec is None:
         plan = pickle.load(session.joinpath('dataset_plan.pkl').open('rb'))
         z, t = min((max(e['grippers'][r]['tcp_pose'][k, 2] for r in robots), e['episode_timestamps'][k])
-            for e in plan for k in range(len(e['episode_timestamps'])))
+            for e in plan for k in range(len(e['episode_timestamps']))
+            if not any(np.isnan(e['grippers'][r]['tcp_pose'][k, 2]) for r in robots))
         time_sec = float(t - head['start_timestamp'])
         print(f"plan step with the lowest TCP ({'higher of both' if len(robots) > 1 else names[robots[0]]}): "
             f"z {z * 100:.1f} cm at head video {time_sec:.2f}s")
