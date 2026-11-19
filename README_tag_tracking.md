@@ -28,11 +28,14 @@ docker pull chicheng/openicc:latest
 
 | File | Content |
 |---|---|
-| `tag_tracking.yaml` | cameras by serial, bodies, episodes; format in `umi/tag_tracking/config.py` |
+| `tag_tracking.yaml` | setup of 2026-11-16 (task1-3): cameras by serial, bodies, episodes; format in `umi/tag_tracking/config.py` |
+| `tag_tracking_station1.yaml` | station1, table room (tool_handling, sugar_steer, test tasks, task_05-10) |
+| `tag_tracking_station1_per_video.yaml` | station1, one episode per video with a fixed trim (test tasks) |
 | `aruco_config.yaml` | dictionary and tag sizes (black square edge, m) |
-| `gripper_config.yaml` | finger tags and TCP geometry per wrist camera; format in `umi/common/gripper_config_util.py` |
+| `gripper_config.yaml`, `gripper_config_station1.yaml` | finger tags and TCP geometry per wrist camera; format in `umi/common/gripper_config_util.py` |
 | `corner_noise.json` | tag corner noise (step 1) |
-| `setup_20261116/` | setup calibration (step 2): tag map, cube shapes, cube -> wrist -> TCP |
+| `setup_20261116/`, `setup_station1/` | setup calibration (step 2): tag map, cube shapes, cube -> wrist -> TCP |
+| `delivery.yaml` | delivery declarations (vendor, dataset, task per session), template for step 6 |
 | `openicc/<camera>/cam/` | OpenICC intrinsics |
 | `openicc/<camera>/cam_imu/` | OpenICC camera-IMU calibration (fitted trajectory removed) |
 | `*_setting_720*.yaml` | IMU noise per camera |
@@ -45,8 +48,11 @@ Cameras (GoPro HERO12, Wide, 2.7K 4:3, 59.94 fps, stabilization off):
 | C3501326502664 | head | `openicc/head` |
 | C3501326029433 | right gripper (robot0) | `openicc/gripper2` |
 | C3501326502891 | left gripper (robot1) | `openicc/gripper1` |
-
 | C3501326500348 | right gripper at station1 | `openicc/cam376` |
+
+At station1 the head camera is the same; C3501326029433 is in the left hand.
+One config per setup: a new station, moved environment tags or a swapped gripper or camera
+need their own config and setup calibration.
 
 With other cameras, calibrate them (Camera calibration below) and replace the serials,
 intrinsics and camera-IMU files. Steps 1 and 2 below are done for this setup; redo step 2
@@ -197,11 +203,86 @@ python scripts_tag_tracking/check_tcp_frame.py -i <session> -c example/tag_track
 python scripts_tag_tracking/04_render_tracking.py -i <session> -c example/tag_tracking/tag_tracking.yaml
 ```
 
+Frame sync of the exported videos (see Frame sync check below):
+
+```
+python scripts_tag_tracking/check_frame_sync.py -i <session> -c example/tag_tracking/tag_tracking.yaml
+```
+
 ### 5. Training dataset
 
 ```
 python scripts_slam_pipeline/07_generate_replay_buffer.py --no_mirror -o <dataset.zarr.zip> <session>
 ```
+
+### 6. Odyssey delivery
+
+Odyssey Robotics Data Capture Spec v0.6, container `mcap`. Needs `pip install pyarrow`.
+
+Input:
+- a processed session with `dataset_plan.pkl` (step 3). For sessions with tracking gaps, export
+  the plan with `--keep_gaps` first: episodes stay whole and frames without a pose are marked
+  instead of the episode being dropped;
+- the session's tag tracking config;
+- a copy of `example/tag_tracking/delivery.yaml` filled in: `delivery:` (vendor, dataset, delivery
+  id, rig, license, anonymization) and one entry per session directory name (`task_text`,
+  `task_family`, ...). Anything left null is exported as null.
+
+```
+python scripts_tag_tracking/06_export_dataset_plan.py -i <session> -c <config> --keep_gaps
+python scripts_tag_tracking/13_export_delivery.py -i <session> -c <config> -d <delivery.yaml> -o <delivery_dir> -j 16
+```
+
+`-e 0,3,6` exports only these plan episodes. Several sessions can go to the same `-o`: the
+manifest keeps the episodes of earlier runs and replaces re-exported ones.
+
+Output, one directory per episode:
+
+| Path | |
+|---|---|
+| `<delivery_dir>/<episode_id>/episode.mcap` | topics as in MCAP below, message times in UTC |
+| `<delivery_dir>/<episode_id>/episode.json` | ids, UTC capture start / end, frame rate, `clock_sync_accuracy_ns`, world frame, gripper range, task |
+| `<delivery_dir>/<episode_id>/sensors.json` | per camera, IMU, TCP pose, gripper: MCAP topic, schema, units, clock offset, intrinsics, extrinsics |
+| `<delivery_dir>/<episode_id>/frames.parquet` | one row per head camera frame: UTC timestamp, TCP poses (xyz + quaternion xyzw), `pose_valid`, gripper widths, head camera pose |
+| `<delivery_dir>/manifest.parquet` | one row per episode with every file's size and sha256, written last |
+
+`episode_id` = head camera serial + UTC start of the head video + head frame of the episode
+start; the same on every re-export. Not filled: `annotations.json`, `success` (null), `outcome`
+(`unknown`), `validation_status` (`not_run`).
+
+## Frame sync check
+
+`check_frame_sync.py` checks the exported frame timestamps against the cameras' own images,
+without the IMUs and without the motion sync it is checking.
+
+Input: a processed session with `dataset_plan.pkl` and its tag tracking config. Uses per
+episode the wrist videos' tag detections (`demos/*/tag_detection.pkl`), the head tracking
+(`demos/<head>/tag_tracking.pkl`), `tag_tracking/bodies.json` and `gripper_tcp.json`.
+
+```
+python scripts_tag_tracking/check_frame_sync.py -i <session> -c <config> [-e 0,3,6] [--min_tags 1] [-j 16]
+```
+
+Per episode and wrist camera, the wrist camera's orientation from the environment tags in its
+own video (at the wrist frame timestamps of the export) is compared with the same camera's
+orientation from the head video (cube pose x cube-to-wrist, at the head frame times); the time
+shift that matches them best is the frame sync error.
+
+Output (printed, nothing written):
+- per episode and wrist camera: frames used, rotation speed, video sync error to the head
+  camera (ms and frames), the mismatch at the best shift, at 0 and at +-1 frame (how well the
+  episode can time a one-frame error), and the wrist IMU against the wrist video (ms);
+- per episode with both wrists timed: the three pairs head-right, head-left, right-left;
+- per wrist video: median and 5-95 % over the episodes that can time a one-frame error, and
+  the right-left median.
+
+0 ms = in sync; one frame is 16.7 ms. A positive error means the wrist frames are stamped too
+early relative to the head video. Sync means equal timestamps show the same instant; each
+camera's video in the MCAP starts at its own keyframe up to 1 s before the episode, so match
+frames by timestamp, not by frame number.
+
+To check the numbers: the configs and calibrations are in `example/tag_tracking/` (table
+above); the processed session directories are not in the repository.
 
 ## Outputs
 
@@ -211,7 +292,8 @@ python scripts_slam_pipeline/07_generate_replay_buffer.py --no_mirror -o <datase
 | `<session>/tag_tracking/wrist_sync.json` | wrist clock corrections and sync accuracy |
 | `<session>/demos/demo_<head>/tag_tracking.pkl` | head, cube and fused gripper poses |
 | `<session>/dataset_plan.pkl` | episodes in the UMI dataset plan format |
-| `<session>/dataset_mcap/episode_*.mcap` | one file per episode |
+| `<session>/dataset_mcap/episode_*.mcap` | one file per episode (07) |
+| `<delivery_dir>/...` | Odyssey delivery (step 6) |
 | `<session>/tag_tracking/tcp_check_*.png` | TCP check renders |
 
 ## MCAP
@@ -219,15 +301,26 @@ python scripts_slam_pipeline/07_generate_replay_buffer.py --no_mirror -o <datase
 | Topic | Schema |
 |---|---|
 | `robot{i}/eef/state` | `umi.msg.EefState`: TCP `pos` (m), `rot_axis_angle` (rad), world frame |
+| `robot{i}/eef/pose` | `umi.msg.PoseQuat`: the same TCP poses, `pos` (m) + `quat_xyzw` |
 | `robot{i}/gripper/state` | `umi.msg.GripperState`: `width` (m) |
 | `robot{i}/eef_demo_start/state`, `robot{i}/eef_demo_end/state` | first / last TCP pose of the episode |
 | `robot{i}/imu` | `umi.msg.ImuSample`: wrist camera IMU |
 | `/cameras/camera{j}/video` | `foxglove.CompressedVideo`, H.265 from the GoPro files, not re-encoded |
+| `/head/pose` | `umi.msg.PoseQuat`: head camera pose in the world per tracked head frame (with `-c`) |
+| `/head/imu` | `umi.msg.ImuSample`: head camera IMU (with `-c` and `head_imu` in the config) |
 
 `robot0` right, `robot1` left; `camera0` robot0 wrist, `camera1` robot1 wrist, `camera2` head.
+No pose message where the pose is not available (tracking gap, plan with `--keep_gaps`);
+the count per robot is in metadata `recording` (`robot{i}_pose_missing_steps`).
 Metadata `recording`: episode length, image size, fps, world frame tag, TCP in the wrist camera frame.
+With `-c`: metadata `camera{j}` (model, lens, field of view, resolution, frame rate,
+Kannala-Brandt intrinsics) and `sync` (method, per camera the frame of the episode's first
+step in the original video and its clock correction).
 
 ## Limitations
 
-- Episodes with a head tracking gap longer than `max_gap_sec` (0.25 s) inside are not exported to `dataset_plan.pkl`.
+- Episodes with a tracking gap longer than `max_gap_sec` (0.25 s) inside are not exported to
+  `dataset_plan.pkl`, unless `--keep_gaps` (then not usable for the replay buffer).
+- Each camera's video in an MCAP starts at its own keyframe before the episode (not re-encoded),
+  so the three videos start up to 1 s apart.
 - A task ends when the first gripper returns to the dock.
