@@ -162,3 +162,19 @@ def frame_timing(mp4_path: str) -> Optional[dict]:
     return {'stream': 'CORI' if 'CORI' in timing else 'MSKP', 'rate_hz': 1e6 / fit['period_us'],
         'rms_us': fit['rms_us'], 'max_us': fit['max_us'], 'n_frames': fit['n_samples'],
         'skipped_mskp': skipped['MSKP'], 'skipped_lskp': skipped['LSKP'], 'has_skip_counters': 'MSKP' in timing}
+
+
+def gyro_rates(mp4_path: str) -> np.ndarray:
+    """
+    Angular rate magnitude (rad/s) of every GYRO sample of the video (GPMF, SCAL applied).
+    """
+    rates = list()
+    for payload in mp4_gpmf_payloads(mp4_path):
+        for devc in payload['klv']:
+            for strm in devc.get('children', []):
+                entries = {c['key']: c for c in strm.get('children', [])}
+                if 'GYRO' in entries and 'value' in entries['GYRO']:
+                    scale = float(np.ravel(entries['SCAL']['value'])[0]) if 'SCAL' in entries else 1.0
+                    gyro = np.asarray(entries['GYRO']['value'], dtype=float).reshape(-1, 3) / scale
+                    rates.append(np.linalg.norm(gyro, axis=1))
+    return np.concatenate(rates) if rates else np.zeros(0)
