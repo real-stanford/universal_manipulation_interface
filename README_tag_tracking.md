@@ -67,11 +67,12 @@ Record with the camera's take settings (2.7K 4:3, 59.94 fps, Wide, stabilization
 | `cam_imu` | 40-60 s, board in view, fast rotations and translations on all three axes, good light |
 | `imu_bias` | 60 s, camera lying still |
 
-OpenICC image with the configurable board (once; from the OpenICC clone with the
-`aruco_marker_length_m` / `aruco_dict` options):
+OpenICC image with the configurable board (once): OpenICC with the
+`aruco_marker_length_m` / `aruco_dict` options, built on top of `chicheng/openicc:latest`:
 
 ```
-cd ~/Desktop/OpenImuCameraCalibrator
+git clone -b configurable-charuco-board https://github.com/PushpakAg/OpenImuCameraCalibrator.git
+cd OpenImuCameraCalibrator
 docker build -f Dockerfile.overlay -t openicc:configurable-board .
 ```
 
