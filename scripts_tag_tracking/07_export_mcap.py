@@ -2,12 +2,19 @@
 Export episodes of dataset_plan.pkl (06_export_dataset_plan.py) as one MCAP
 file per episode (JSON schemas umi.msg.* and foxglove.*), viewable in Foxglove:
 
-  robot{i}/eef/state              umi.msg.EefState      TCP pos + rot_axis_angle per step
+  robot{i}/eef/state              umi.msg.EefState      TCP pos + rot_axis_angle per step; no message
+                                                        where the pose is not available (tracking gap,
+                                                        count in metadata robot{i}_pose_missing_steps)
+  robot{i}/eef/pose               umi.msg.PoseQuat      the same TCP poses as position + quaternion xyzw
   robot{i}/gripper/state          umi.msg.GripperState  gripper width per step
   robot{i}/eef_demo_start/state   umi.msg.EefState      once, at the first step
   robot{i}/eef_demo_end/state     umi.msg.EefState      once, at the last step
   robot{i}/imu                    umi.msg.ImuSample     wrist GoPro IMU, raw GPMF axes, all samples
   /cameras/camera{j}/video        foxglove.CompressedVideo  H.265, the GoPro's own stream
+  /head/pose                      umi.msg.PoseQuat      (with -c) head camera pose in the world per head frame
+                                                        where tracked (position + quaternion xyzw, world from
+                                                        camera; the instant of the middle image row)
+  /head/imu                       umi.msg.ImuSample     (with -c and head_imu) head GoPro IMU, raw GPMF axes
   metadata 'recording'            episode, robot, camera and frame information
   metadata 'camera{j}'             (with -c) role, serial, model, firmware, lens, stabilization,
                                    field of view, resolution, frame rate, Kannala-Brandt intrinsics
@@ -50,6 +57,7 @@ from umi.tag_tracking.imu import load_imu
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.camera_metadata import camera_record
 from umi.common.exiftool_util import ExifTool
+from scipy.spatial.transform import Rotation
 
 SYNC_METHOD = 'audio cross-correlation, wrist motion refinement'
 
@@ -58,9 +66,12 @@ LIBRARY = 'umi tag tracking'
 TIME_SCHEMA = {"type": "object", "properties": {"sec": {"type": "integer"}, "nsec": {"type": "integer"}},
     "required": ["sec", "nsec"]}
 VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+VEC4 = {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}
 SCHEMAS = {
     'umi.msg.EefState': {"type": "object", "properties": {"pos": VEC3, "rot_axis_angle": VEC3},
         "required": ["pos", "rot_axis_angle"]},
+    'umi.msg.PoseQuat': {"type": "object", "properties": {"pos": VEC3, "quat_xyzw": VEC4},
+        "required": ["pos", "quat_xyzw"]},
     'umi.msg.GripperState': {"type": "object", "properties": {"width": {"type": "number"}}, "required": ["width"]},
     'umi.msg.ImuSample': {"type": "object", "properties": {"timestamp": TIME_SCHEMA, "linear_acceleration": VEC3,
         "angular_velocity": VEC3}, "required": ["timestamp", "linear_acceleration", "angular_velocity"]},
@@ -154,8 +165,43 @@ def frame0_time(camera: dict, times: np.ndarray, dt: float) -> float:
     return float(times[0] - camera['video_start_end'][0] * dt)
 
 
+def head_extras(plan_episode, demos_dir, config, tracks: dict) -> dict:
+    """
+    The head camera's tracked poses over the episode's head frames (tag_tracking.pkl, head IMU fused),
+    the instant they refer to (frame time + readout / 2, the middle image row) and the head IMU time
+    offset (head_imu of the config; None without). None if the plan has no head camera.
+    tracks: cache of loaded tag_tracking.pkl per head video.
+    """
+    from umi.tag_tracking.imu import load_cam_imu_calibration, wrist_imu_time_offset
+    cameras = plan_episode['cameras']
+    if len(cameras) <= len(plan_episode['grippers']):
+        return None
+    video_dir = demos_dir.joinpath(cameras[-1]['video_path']).parent
+    if video_dir.name not in tracks:
+        track = pickle.load(video_dir.joinpath('tag_tracking.pkl').open('rb'))
+        raw = str(video_dir.joinpath('raw_video.mp4'))
+        with ExifTool() as et:
+            readout = float(list(et.get_metadata(raw))[0]['QuickTime:SensorReadoutTime']) * 1e-3
+        with av.open(raw) as container:
+            fps = float(container.streams.video[0].average_rate)
+        offset = None
+        if 'head_imu' in config:
+            offset = wrist_imu_time_offset(config['head_imu'],
+                load_cam_imu_calibration(config['head_imu']['cam_imu_calibration']), raw, 1 / fps)
+        tracks[video_dir.name] = {'T': track['head']['T_world_cam'], 'valid': track['head']['is_valid'],
+            'readout': readout, 'imu_time_offset': offset}
+    x = tracks[video_dir.name]
+    a, b = cameras[-1]['video_start_end']
+    T = x['T'][a:b]
+    return {'T_world_cam': T, 'valid': x['valid'][a:b] & ~np.isnan(T[:, 0, 0]),
+        'row_time_offset': x['readout'] / 2, 'imu_time_offset': x['imu_time_offset']}
+
+
 def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video_fps, tcps_in_camera,
-        camera_records=None, sync_record=None):
+        camera_records=None, sync_record=None, time_offset=0.0, head=None):
+    """
+    head (head_extras): head camera poses of the episode's head frames and its IMU time offset, or None.
+    """
     times = np.asarray(plan_episode['episode_timestamps'], dtype=np.float64)
     dt = float(np.median(np.diff(times))) if len(times) > 1 else 1 / video_fps
     cameras = plan_episode['cameras']
@@ -170,11 +216,19 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             return writer.register_channel(topic=topic, message_encoding='json', schema_id=schema_ids[schema],
                 metadata=metadata or {})
 
+        # message times: session clock + time_offset (13_export_delivery.py: UTC)
+        stamp_ = lambda t: stamp(t + time_offset)
+
         def write(channel_id, t, message):
-            writer.add_message(channel_id, log_time=ns(t), publish_time=ns(t), data=json.dumps(message).encode())
+            writer.add_message(channel_id, log_time=ns(t + time_offset), publish_time=ns(t + time_offset),
+                data=json.dumps(message).encode())
+
+        def pose_quat(pos, quat):
+            return {'pos': list(map(float, pos)), 'quat_xyzw': list(map(float, quat))}
 
         for g, gripper in enumerate(grippers):
             eef = channel(f'robot{g}/eef/state', 'umi.msg.EefState')
+            eef_quat = channel(f'robot{g}/eef/pose', 'umi.msg.PoseQuat')
             width = channel(f'robot{g}/gripper/state', 'umi.msg.GripperState')
             demo_start = channel(f'robot{g}/eef_demo_start/state', 'umi.msg.EefState')
             demo_end = channel(f'robot{g}/eef_demo_end/state', 'umi.msg.EefState')
@@ -183,7 +237,10 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             write(demo_end, times[-1], {'pos': list(map(float, gripper['demo_end_pose'][:3])),
                 'rot_axis_angle': list(map(float, gripper['demo_end_pose'][3:]))})
             for t, p, w in zip(times, gripper['tcp_pose'], gripper['gripper_width']):
-                write(eef, t, {'pos': list(map(float, p[:3])), 'rot_axis_angle': list(map(float, p[3:]))})
+                # no message where the pose is not available (tracking gap, 06 --keep_gaps)
+                if not np.isnan(p).any():
+                    write(eef, t, {'pos': list(map(float, p[:3])), 'rot_axis_angle': list(map(float, p[3:]))})
+                    write(eef_quat, t, pose_quat(p[:3], Rotation.from_rotvec(p[3:]).as_quat()))
                 write(width, t, {'width': float(np.asarray(w).reshape(-1)[0])})
             # wrist camera g is camera g: its IMU, on the session clock via the plan's frame alignment
             camera = cameras[g]
@@ -195,8 +252,27 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             imu_times = frame0_time(camera, times, dt) + imu['time'] + (camera.get('imu_time_offset') or 0.0)
             inside = (imu_times >= times[0]) & (imu_times <= times[-1] + dt)
             for t, a, w in zip(imu_times[inside], imu['accel'][inside], imu['gyro'][inside]):
-                write(imu_channel, t, {'timestamp': stamp(t), 'linear_acceleration': list(map(float, a)),
+                write(imu_channel, t, {'timestamp': stamp_(t), 'linear_acceleration': list(map(float, a)),
                     'angular_velocity': list(map(float, w))})
+
+        if head is not None:
+            # head camera (last camera of the plan): its own tracked pose per head frame, and its IMU
+            camera = cameras[-1]
+            t0 = frame0_time(camera, times, dt)
+            first = camera['video_start_end'][0]
+            pose_channel = channel('/head/pose', 'umi.msg.PoseQuat')
+            for i, (T, ok) in enumerate(zip(head['T_world_cam'], head['valid'])):
+                if ok:
+                    write(pose_channel, t0 + (first + i) * dt + head['row_time_offset'],
+                        pose_quat(T[:3, 3], Rotation.from_matrix(T[:3, :3]).as_quat()))
+            if head.get('imu_time_offset') is not None:
+                imu = load_imu(str(demos_dir.joinpath(camera['video_path']).parent.joinpath('imu_data.json')))
+                imu_channel = channel('/head/imu', 'umi.msg.ImuSample')
+                imu_times = t0 + imu['time'] + head['imu_time_offset']
+                inside = (imu_times >= times[0]) & (imu_times <= times[-1] + dt)
+                for t, a, w in zip(imu_times[inside], imu['accel'][inside], imu['gyro'][inside]):
+                    write(imu_channel, t, {'timestamp': stamp_(t), 'linear_acceleration': list(map(float, a)),
+                        'angular_velocity': list(map(float, w))})
 
         image_size = None
         for c, camera in enumerate(cameras):
@@ -208,7 +284,7 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             video = channel(f'/cameras/camera{c}/video', 'foxglove.CompressedVideo', {'stream_type': 'color'})
             for index, data in video_messages(str(video_path), start, stop):
                 t = frame0_time(camera, times, dt) + index * dt
-                write(video, t, {'timestamp': stamp(t), 'frame_id': f'camera{c}', 'format': 'h265',
+                write(video, t, {'timestamp': stamp_(t), 'frame_id': f'camera{c}', 'format': 'h265',
                     'data': base64.b64encode(data).decode()})
 
         writer.add_metadata('recording', {
@@ -232,6 +308,9 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             'units': 'm,rad',
             'gripper_width_unit': 'm',
             'gripper_width_zero': 'fully closed',
+            # steps without a pose message: pose not available (tracking gap)
+            **{f'robot{g}_pose_missing_steps': str(int(np.isnan(np.asarray(gripper['tcp_pose'])).any(axis=1).sum()))
+                for g, gripper in enumerate(grippers)},
         })
         for c, record in enumerate(camera_records or []):
             writer.add_metadata(f'camera{c}', record)
@@ -292,6 +371,7 @@ def main(input, output, episodes, config, num_workers):
     print(f"{len(plan)} episodes in the plan, writing {len(indices)} to {output}")
     # camera and sync metadata (camera order of the plan: wrist cameras in robot order, then the head)
     camera_records, sync_records = {k: None for k in indices}, {k: None for k in indices}
+    heads = {k: None for k in indices}
     if config is not None:
         config = load_tag_tracking_config(config)
         sync_path = session.joinpath('tag_tracking', 'wrist_sync.json')
@@ -318,12 +398,16 @@ def main(input, output, episodes, config, num_workers):
                 line = (fits.get(pathlib.Path(camera['video_path']).parent.name) or dict()).get('line')
                 if line is not None:
                     sync_records[k][f'camera{c}_sync_sigma_ms'] = f"{line['residual_ms']:.2f}"
+        tracks = dict()
+        for k in indices:
+            heads[k] = head_extras(plan[k], demos_dir, config, tracks)
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_workers, len(indices)),
             mp_context=multiprocessing.get_context('spawn')) as executor:
         futures = {executor.submit(write_episode, str(output.joinpath(f'episode_{k:06d}.mcap')), k, plan[k],
-            demos_dir, world_tag, video_fps, tcps_in_camera, camera_records[k], sync_records[k]): k for k in indices}
+            demos_dir, world_tag, video_fps, tcps_in_camera, camera_records[k], sync_records[k], 0.0, heads[k]): k
+            for k in indices}
         for future in concurrent.futures.as_completed(futures):
             path = future.result()
             print(f"{pathlib.Path(path).name}: {os.path.getsize(path) / 1e6:.0f} MB, {verify(path)}")
