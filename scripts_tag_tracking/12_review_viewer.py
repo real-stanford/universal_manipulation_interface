@@ -227,7 +227,9 @@ class Session:
         raw = yaml.safe_load(self.delivery.open('r')) if self.delivery.is_file() else dict()
         raw = raw or dict()
         raw.setdefault('sessions', dict())
-        raw['sessions'][self.session.name] = {k: values.get(k) for k in SESSION_KEYS}
+        # the viewer edits the session declarations; other keys (the task) are kept
+        raw['sessions'][self.session.name] = {**(raw['sessions'].get(self.session.name) or dict()),
+            **{k: values.get(k) for k in SESSION_KEYS}}
         tmp = self.delivery.with_suffix('.tmp')
         yaml.safe_dump(raw, tmp.open('w'), sort_keys=False)
         load_delivery_config(str(tmp))  # validate before replacing

@@ -1,10 +1,25 @@
 # Delivery declarations (Odyssey spec 2.3 / 2.4 / 2.9), read by
-# scripts_tag_tracking/10_coverage_report.py and the delivery export.
+# scripts_tag_tracking/10_coverage_report.py and 13_export_delivery.py.
 # Copy this file, fill in what is known; null means not known and is
 # exported as null.
+delivery:
+  schema_version: '0.6'
+  vendor_name: null
+  dataset_name: null        # stable collection name
+  delivery_id: null         # one atomic delivery
+  robot_model: null         # rig name, e.g. the handheld gripper's name and version
+  gripper_type: null
+  source_uri_prefix: null   # where the raw GoPro files live, e.g. s3://bucket/prefix/ (+ <session>/raw_videos/<file>)
+  license_reference: null
+  anonymization_state: null # faces_blurred | not_required | pending | other
+  consent_reference: null   # default for sessions that do not declare their own
 sessions:
   # one entry per session directory name
   task1:
+    task_text: null           # natural-language goal of every episode of the session
+    task_family: null         # grasp place stack sort insert bin_pick tool_use pour fold wipe assemble
+                              # open_close handover restock pack
+    object_tags: []           # from: rigid deformable articulated granular liquid tool
     collection_mode: null     # scripted (task given before recording) | freeform | adversarial | in_the_wild
     scene_tags: []            # from: tabletop kitchen workbench warehouse retail industrial_line household
                               #       hospitality laboratory outdoor other
