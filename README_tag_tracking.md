@@ -46,8 +46,67 @@ Cameras (GoPro HERO12, Wide, 2.7K 4:3, 59.94 fps, stabilization off):
 | C3501326029433 | right gripper (robot0) | `openicc/gripper2` |
 | C3501326502891 | left gripper (robot1) | `openicc/gripper1` |
 
-With other cameras, replace the serials, intrinsics and camera-IMU files. Steps 1 and 2 below
-are done for this setup; redo step 2 after moving environment tags or remounting a cube or camera.
+| C3501326500348 | right gripper at station1 | `openicc/cam376` |
+
+With other cameras, calibrate them (Camera calibration below) and replace the serials,
+intrinsics and camera-IMU files. Steps 1 and 2 below are done for this setup; redo step 2
+after moving environment tags or remounting a cube or camera.
+
+## Camera calibration
+
+Once per camera (and after changing its lens or video settings): intrinsics (Kannala-Brandt
+fisheye) and camera-IMU rotation / translation with OpenImuCameraCalibrator (OpenICC).
+
+Board: ChArUco 12 x 9 squares, 30 mm squares, 22 mm markers, `DICT_5X5_100`, flat and rigid.
+
+Record with the camera's take settings (2.7K 4:3, 59.94 fps, Wide, stabilization off), three videos:
+
+| Video | How |
+|---|---|
+| `cam` | 30-60 s, move slowly around the board: all image regions, near and far, tilted views |
+| `cam_imu` | 40-60 s, board in view, fast rotations and translations on all three axes, good light |
+| `imu_bias` | 60 s, camera lying still |
+
+OpenICC image with the configurable board (once; from the OpenICC clone with the
+`aruco_marker_length_m` / `aruco_dict` options):
+
+```
+cd ~/Desktop/OpenImuCameraCalibrator
+docker build -f Dockerfile.overlay -t openicc:configurable-board .
+```
+
+Sort a camera's three videos into the OpenICC layout (roles from the gyro: the still video, then
+the board video with less / more rotation); check the table with `--dry_run` first:
+
+```
+python scripts/prepare_openicc_dataset.py -o ~/openicc_calib -n set2_head --dry_run \
+    ~/Videos/set2_calib/head/GX010157.MP4 ~/Videos/set2_calib/head/GX010158.MP4 ~/Videos/set2_calib/head/GX010159.MP4
+python scripts/prepare_openicc_dataset.py -o ~/openicc_calib -n set2_head \
+    ~/Videos/set2_calib/head/GX010157.MP4 ~/Videos/set2_calib/head/GX010158.MP4 ~/Videos/set2_calib/head/GX010159.MP4
+```
+
+Calibrate (15-25 min per camera; one terminal per camera to run several at once):
+
+```
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -v ~/openicc_calib/set2_head:/dataset \
+    openicc:configurable-board python3 /OpenImuCameraCalibrator/python/run_gopro_calibration.py \
+    --path_calib_dataset=/dataset --path_to_build=/OpenImuCameraCalibrator/build/applications \
+    --num_squares_x=12 --num_squares_y=9 --checker_size_m=0.030 --marker_size_m=0.022 --aruco_dict=DICT_5X5_100 \
+    --camera_model=FISHEYE --image_downsample_factor=1 --bias_calib_remove_s=2 \
+    2>&1 | tee ~/openicc_calib/set2_head/calibration.log
+```
+
+Import into `example/tag_tracking/` (intrinsics, camera-IMU without the fitted trajectory, IMU
+noise setting); prints the numbers to check and the config lines:
+
+```
+python scripts/import_openicc_calibration.py -i ~/openicc_calib/set2_head -n set2_head -s C3501326495617
+```
+
+Check: intrinsics reprojection error about 0.3-1 px; camera-IMU translation about 20-25 mm
+from zero (the IMU sits at the same place in every HERO12). A translation near 0 means the
+`cam_imu` video moved too little: record it again with faster translations. Then add the
+camera to the tag tracking config (`cameras`, `gripper_imu` or `head_imu`).
 
 Print tags (black square `-t` mm, as in `aruco_config.yaml`):
 
