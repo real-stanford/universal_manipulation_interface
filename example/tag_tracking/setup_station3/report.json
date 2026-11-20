@@ -1,0 +1,129 @@
+{
+  "source_session": "task01",
+  "head_mapping_videos": [
+    "head_mapping_C3501326495617_2026.11.20_13.57.23.193000"
+  ],
+  "head_task_video": "demo_C3501326495617_2026.11.20_14.07.32.134667",
+  "n_frames": {
+    "environment": 2027,
+    "right_cube": 2865,
+    "left_cube": 4041
+  },
+  "missing_tags": {
+    "environment": [
+      13,
+      15,
+      17,
+      26,
+      27,
+      28,
+      29,
+      32,
+      33,
+      34,
+      35,
+      38,
+      39,
+      40,
+      41,
+      44
+    ],
+    "right_cube": [],
+    "left_cube": []
+  },
+  "variance_factor": {
+    "environment": 11.88435604145133,
+    "right_cube": 2.0411424980454846,
+    "left_cube": 2.0185885414681333
+  },
+  "shape_sources": {},
+  "line_delay_us": 5.424063116370808,
+  "readout_ms": 11.0,
+  "wrist_clocks": "audio sync",
+  "T_wrist_tcp": {
+    "right_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.192
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "left_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.192
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "cube_to_wrist": {
+    "right_cube": {
+      "n_candidates": 17150,
+      "n_sampled": 600,
+      "n_wrist_invalid": 244,
+      "n_head_invalid": 22,
+      "n_too_fast": 63,
+      "n_estimates": 271,
+      "n_inliers": 258,
+      "spread_mm": 1.9644484033457887,
+      "spread_deg": 0.3900931514563776,
+      "std_error_mm": 0.16410009255707617,
+      "std_error_deg": 0.030977587332284423,
+      "median_cube_speed": 0.07705939983081078,
+      "distance_cube_to_wrist_mm": 129.48052344425295
+    },
+    "left_cube": {
+      "n_candidates": 19647,
+      "n_sampled": 600,
+      "n_wrist_invalid": 283,
+      "n_head_invalid": 12,
+      "n_too_fast": 63,
+      "n_estimates": 242,
+      "n_inliers": 238,
+      "spread_mm": 2.1498957894808646,
+      "spread_deg": 0.419187150670939,
+      "std_error_mm": 0.18518517867558476,
+      "std_error_deg": 0.03357868538586722,
+      "median_cube_speed": 0.08541133112896138,
+      "distance_cube_to_wrist_mm": 130.6593334349093
+    }
+  }
+}

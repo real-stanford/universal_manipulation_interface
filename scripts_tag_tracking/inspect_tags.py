@@ -26,35 +26,10 @@ os.chdir(ROOT_DIR)
 import concurrent.futures
 import pathlib
 import click
-import av
-import cv2
-import numpy as np
 import yaml
 from umi.common.cv_util import parse_aruco_config
 from umi.common.exiftool_util import ExifTool
-from umi.tag_tracking.tag_detection import detect_tag_corners, tag_inventory
-
-
-def sample_detections(path, predefined, every_sec, max_sec):
-    """
-    Tag corners of one frame every every_sec seconds (up to max_sec).
-    """
-    cv2.setNumThreads(1)
-    aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, predefined))
-    detections = list()
-    with av.open(str(path)) as container:
-        stream = container.streams.video[0]
-        stream.thread_type = 'AUTO'
-        duration = float(stream.frames / stream.average_rate)
-        size = (stream.codec_context.width, stream.codec_context.height)
-        end = duration if max_sec is None else min(duration, max_sec)
-        for t in np.arange(0.0, end, every_sec):
-            container.seek(int(t / stream.time_base), stream=stream)
-            for frame in container.decode(stream):
-                if float(frame.pts * stream.time_base) >= t - 0.5 / float(stream.average_rate):
-                    detections.append(detect_tag_corners(frame.to_ndarray(format='gray'), aruco_dict))
-                    break
-    return {'duration': duration, 'size': size, 'detections': detections}
+from umi.tag_tracking.tag_detection import sample_detections, tag_inventory
 
 
 # %%

@@ -100,3 +100,33 @@ def tag_inventory(detections: Sequence[Dict[int, np.ndarray]], image_size: Seque
         out[tag_id] = {'share': len(x) / max(len(detections), 1), 'side_px': float(np.median(x[:, 0])),
             'center': (float(np.median(x[:, 1])), float(np.median(x[:, 2])))}
     return out
+
+
+def sample_detections(path: str, predefined: str, every_sec: float, max_sec: Optional[float] = None) -> dict:
+    """
+    Tag corners (detect_tag_corners) of one frame every every_sec seconds of a
+    video, up to max_sec. Returns {'duration': s, 'size': (w, h), 'detections': [...]},
+    detections[i] at i * every_sec.
+    """
+    import av
+    import av.logging
+    av.logging.set_level(av.logging.ERROR)   # swscaler 'deprecated pixel format' per frame
+    cv2.setNumThreads(1)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, predefined))
+    detections = list()
+    # URLs (presigned S3): reconnect when the connection drops mid-read
+    options = {'reconnect': '1', 'reconnect_on_network_error': '1', 'reconnect_delay_max': '10'} \
+        if str(path).startswith('http') else None
+    with av.open(str(path), options=options) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = 'AUTO'
+        duration = float(stream.frames / stream.average_rate)
+        size = (stream.codec_context.width, stream.codec_context.height)
+        end = duration if max_sec is None else min(duration, max_sec)
+        for t in np.arange(0.0, end, every_sec):
+            container.seek(int(t / stream.time_base), stream=stream)
+            for frame in container.decode(stream):
+                if float(frame.pts * stream.time_base) >= t - 0.5 / float(stream.average_rate):
+                    detections.append(detect_tag_corners(frame.to_ndarray(format='gray'), aruco_dict))
+                    break
+    return {'duration': duration, 'size': size, 'detections': detections}

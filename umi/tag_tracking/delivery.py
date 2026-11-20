@@ -96,15 +96,21 @@ def align_values(times: np.ndarray, values: np.ndarray, query: np.ndarray, max_s
 def load_gripper_range(session: pathlib.Path, serial: str, gripper: Optional[Dict] = None) -> Dict:
     """
     gripper_range.json (05_run_calibrations.py) of a wrist camera: finger tag distance min / max (m).
-    With the gripper's config entry: from its range_camera's calibration video if it has one.
+    From the camera's own gripper calibration video when the session has one; else, with the
+    gripper's config entry, from its range_camera's (a session where the gripper was calibrated
+    with another camera).
     """
-    serial = (gripper or dict()).get('range_camera', serial)
+    ranges = dict()
     with ExifTool() as et:
         for path in session.glob('demos/gripper_calibration*/gripper_range.json'):
             meta = list(et.get_metadata(str(path.parent.joinpath('raw_video.mp4'))))[0]
-            if meta['QuickTime:CameraSerialNumber'] == serial:
-                return json.load(path.open('r'))
-    raise RuntimeError(f"no gripper_range.json for camera {serial}, run 05_run_calibrations.py")
+            ranges.setdefault(meta['QuickTime:CameraSerialNumber'], path)
+    for candidate in (serial, (gripper or dict()).get('range_camera')):
+        if candidate in ranges:
+            return json.load(ranges[candidate].open('r'))
+    raise RuntimeError(f"no gripper_range.json for camera {serial}"
+        + (f" or its range_camera {gripper['range_camera']}" if (gripper or dict()).get('range_camera') else '')
+        + ", run 05_run_calibrations.py")
 
 
 def finger_widths(detections: Sequence[dict], left_tag: int, right_tag: int, nominal_z: float,

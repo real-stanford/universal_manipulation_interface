@@ -16,7 +16,9 @@ SESSION_KEYS = ['collection_mode', 'scene_tags', 'environment_id', 'operator_id'
 TASK_FAMILIES = ['grasp', 'place', 'stack', 'sort', 'insert', 'bin_pick', 'tool_use', 'pour', 'fold', 'wipe',
     'assemble', 'open_close', 'handover', 'restock', 'pack']
 OBJECT_CLASSES = ['rigid', 'deformable', 'articulated', 'granular', 'liquid', 'tool']
-TASK_KEYS = ['task_text', 'task_family', 'object_tags']
+OUTCOMES = ['success', 'failure', 'partial', 'aborted', 'unknown']
+# outcome: declared for every episode of the session (where it has no annotation)
+TASK_KEYS = ['task_text', 'task_family', 'object_tags', 'outcome']
 # per delivery (spec 2.3 / 2.4), 13_export_delivery.py
 DELIVERY_KEYS = ['schema_version', 'vendor_name', 'dataset_name', 'delivery_id', 'robot_model', 'gripper_type',
     'source_uri_prefix', 'license_reference', 'anonymization_state', 'consent_reference']
@@ -45,6 +47,8 @@ def load_delivery_config(path: Optional[str]) -> Dict:
         assert not unknown, f"session {name}: unknown keys {sorted(unknown)}, known {SESSION_KEYS + TASK_KEYS}"
         family = s.get('task_family')
         assert family is None or family in TASK_FAMILIES, f"session {name}: task_family {family} not in {TASK_FAMILIES}"
+        outcome = s.get('outcome')
+        assert outcome is None or outcome in OUTCOMES, f"session {name}: outcome {outcome} not in {OUTCOMES}"
         objects = s.get('object_tags') or []
         assert isinstance(objects, list) and all(t in OBJECT_CLASSES for t in objects), \
             f"session {name}: object_tags {objects} must be a list from {OBJECT_CLASSES}"

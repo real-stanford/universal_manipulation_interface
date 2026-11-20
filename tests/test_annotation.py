@@ -129,8 +129,14 @@ def test_schema_and_merge():
     assert ev[('right', 4.0)]['verb'] == '' and ev[('right', 4.0)]['measured_phase'] == 'hold'
     assert sum(e['end_s'] - e['start_s'] for e in out['events'] if e['arm'] == 'right') == 20.0
     kinds = [(k['t_s'], k['kind'], k['outcome']) for k in out['key_events']]
-    assert kinds == [(1.0, 'contact', None), (4.0, 'contact', 'success'), (8.0, 'contact', None),
-        (8.5, 'subgoal_complete', 'success')]
+    # the left close at 1.0 closes fully on nothing (measured): no contact
+    assert kinds == [(4.0, 'contact', 'success'), (8.0, 'contact', None), (8.5, 'subgoal_complete', 'success')]
+    # task objects: the ones acted on; the saucer is never touched or used as a destination
+    assert task['objects'] == ['cup']
+    # the model reading a close as empty: no contact either
+    answer['gripper_events'][0]['grasped_or_released'] = False
+    assert [k['t_s'] for k in merge_annotation(answer, 10.0, 12.0, 25.0, spans, events)['key_events']] == [8.0, 8.5]
+    answer['gripper_events'][0]['grasped_or_released'] = True
     # not a success: no completion time
     answer['task']['outcome'] = 'failure'
     assert merge_annotation(answer, 10.0, 12.0, 25.0, spans, events)['tasks'][0]['completed_at_s'] is None
@@ -196,9 +202,36 @@ def test_bangs():
         'state_changes': [], 'recoveries': [], 'issues': [], 'objects': [], 'scene_graph': []}
     out = merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [12.0, 25.0])
     kinds = [(k['t_s'], k['kind']) for k in out['key_events']]
-    assert kinds == [(1.0, 'contact'), (2.0, 'phase'), (4.0, 'contact'), (8.0, 'contact'), (15.0, 'phase')]
+    # the empty left close at 1.0 is no contact
+    assert kinds == [(2.0, 'phase'), (4.0, 'contact'), (8.0, 'contact'), (15.0, 'phase')]
     # end defaults to the last span's end: a bang at 30 s is outside
-    assert len(merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [30.0])['key_events']) == 3
+    assert len(merge_annotation(answer, 10.0, 12.0, 25.0, spans, events, [30.0])['key_events']) == 2
+
+
+def test_delivery_annotation():
+    from umi.tag_tracking.annotation import find_annotation, delivery_annotation
+    # dock-to-dock episode 10-30 s of the head video, task 12-25 s; delivered episode from 11.5 s, 14 s long
+    a = {'source': {'head_video': 'h'}, 'measured': {'start': 10.0, 'task_start': 12.0, 'task_end': 25.0},
+        'schema_version': '0.6', 'annotation_source': 'model', 'annotation_model': 'm', 'prompt_mode': 'inferred',
+        'given_prompt': None, 'created_ts_utc': 'x', 'model_answer': {}, 'objects': [],
+        'tasks': [{'start_s': 2.0, 'end_s': 15.0, 'completed_at_s': 14.0, 'task': 't'}],
+        'events': [{'start_s': 0.0, 'end_s': 2.0, 'arm': 'right', 'verb': 'reset'},
+            {'start_s': 2.0, 'end_s': 9.0, 'arm': 'right', 'verb': 'reach'},
+            {'start_s': 9.0, 'end_s': 20.0, 'arm': 'right', 'verb': 'carry'}],
+        'key_events': [{'t_s': 1.0}, {'t_s': 4.0, 'measured_t_begin_s': 3.5}, {'t_s': 16.0}],
+        'state_changes': [{'t_s': 8.0}], 'issues': [{'t_s': 0.5}], 'scene_graph': [{'t_s': 15.5}],
+        'recoveries': [{'failure_t_s': 5.0, 'recovered_at_s': 7.0}]}
+    assert find_annotation([a], 'h', 12.1, 24.0) is a and find_annotation([a], 'h', 26.0, 30.0) is None
+    assert find_annotation([a], 'other', 12.1, 24.0) is None
+    d = delivery_annotation(a, 11.5, 14.0, 'ep1')
+    assert d['episode_id'] == 'ep1' and 'model_answer' not in d and 'measured' not in d
+    assert (d['tasks'][0]['start_s'], d['tasks'][0]['end_s'], d['tasks'][0]['completed_at_s']) == (0.5, 13.5, 12.5)
+    # moved by -1.5 s and clipped to [0, 14): the part of the reset after the cut stays
+    assert [(e['start_s'], e['end_s'], e['verb']) for e in d['events']] == [(0.0, 0.5, 'reset'), (0.5, 7.5, 'reach'),
+        (7.5, 14.0, 'carry')]
+    assert [k['t_s'] for k in d['key_events']] == [2.5] and d['key_events'][0]['measured_t_begin_s'] == 2.0
+    assert [x['t_s'] for x in d['state_changes']] == [6.5] and d['issues'] == [] and d['scene_graph'] == []
+    assert d['recoveries'] == [{'failure_t_s': 3.5, 'recovered_at_s': 5.5}]
 
 
 if __name__ == '__main__':
@@ -209,4 +242,5 @@ if __name__ == '__main__':
     test_schema_and_merge()
     test_vocabulary()
     test_bangs()
+    test_delivery_annotation()
     print("all passed")

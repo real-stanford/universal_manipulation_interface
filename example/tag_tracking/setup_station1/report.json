@@ -1,5 +1,5 @@
 {
-  "source_session": "/home/humyn-labs/Videos/station1/sessions/tool_handling",
+  "source_session": "tool_handling",
   "head_mapping_videos": [
     "head_mapping_C3501326502664_2026.11.18_10.25.32.578417"
   ],
@@ -21,7 +21,7 @@
   },
   "shape_sources": {
     "left_cube": {
-      "source": "/home/humyn-labs/Desktop/universal_manipulation_interface/example/tag_tracking/setup_20261116/bodies.json:right_cube",
+      "source": "setup_20261116/bodies.json:right_cube",
       "estimated_here_minus_source_mm": {
         "2": 0.0,
         "3": 93.77919876530844,

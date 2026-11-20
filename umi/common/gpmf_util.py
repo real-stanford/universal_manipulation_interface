@@ -164,17 +164,23 @@ def frame_timing(mp4_path: str) -> Optional[dict]:
         'skipped_mskp': skipped['MSKP'], 'skipped_lskp': skipped['LSKP'], 'has_skip_counters': 'MSKP' in timing}
 
 
-def gyro_rates(mp4_path: str) -> np.ndarray:
+def gyro_vectors(mp4_path: str) -> np.ndarray:
     """
-    Angular rate magnitude (rad/s) of every GYRO sample of the video (GPMF, SCAL applied).
+    Angular rate (rad/s, (N,3), camera IMU axes) of every GYRO sample of the video (GPMF, SCAL applied).
     """
-    rates = list()
+    samples = list()
     for payload in mp4_gpmf_payloads(mp4_path):
         for devc in payload['klv']:
             for strm in devc.get('children', []):
                 entries = {c['key']: c for c in strm.get('children', [])}
                 if 'GYRO' in entries and 'value' in entries['GYRO']:
                     scale = float(np.ravel(entries['SCAL']['value'])[0]) if 'SCAL' in entries else 1.0
-                    gyro = np.asarray(entries['GYRO']['value'], dtype=float).reshape(-1, 3) / scale
-                    rates.append(np.linalg.norm(gyro, axis=1))
-    return np.concatenate(rates) if rates else np.zeros(0)
+                    samples.append(np.asarray(entries['GYRO']['value'], dtype=float).reshape(-1, 3) / scale)
+    return np.concatenate(samples) if samples else np.zeros((0, 3))
+
+
+def gyro_rates(mp4_path: str) -> np.ndarray:
+    """
+    Angular rate magnitude (rad/s) of every GYRO sample of the video (GPMF, SCAL applied).
+    """
+    return np.linalg.norm(gyro_vectors(mp4_path), axis=1)

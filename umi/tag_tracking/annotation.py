@@ -290,6 +290,18 @@ def bang_key_events(bangs: Sequence[float], start: float, end: float, task_start
     return out
 
 
+def task_objects(task: dict, events: Sequence[dict], key_events: Sequence[dict], state_changes: Sequence[dict]) -> list:
+    """
+    The task's objects: those the arms act on or put things into (span object / destination,
+    grasped or released objects, objects whose state changes), in the model's order. Objects
+    only seen in the scene stay in the objects layer. All of them if none is acted on.
+    """
+    used = {x for e in events for x in (e.get('object'), e.get('destination'))} \
+        | {k.get('object') for k in key_events} | {c.get('object') for c in state_changes}
+    acted = [o for o in task['objects'] if o in used]
+    return acted or list(task['objects'])
+
+
 def merge_annotation(answer: dict, start: float, task_start: float, task_end: float,
         spans: Dict[str, dict], events: Dict[str, dict], bangs: Sequence[float] = (), end: Optional[float] = None) -> dict:
     """
@@ -316,6 +328,14 @@ def merge_annotation(answer: dict, start: float, task_start: float, task_end: fl
     key_events = list()
     for i, e in events.items():
         m = labeled.get(i, {})
+        # a contact key event only where the gripper grasped or released something (the model's
+        # reading of the frames, else the measured hold); closing / opening on nothing is no contact
+        # (it stays in the arm's spans)
+        touched = m.get('grasped_or_released')
+        if touched is None:
+            touched = bool(e.get('holding')) if e['kind'] == 'close' else None
+        if touched is False:
+            continue
         key_events.append({
             't_s': e['t'] - start, 'label': m.get('label') or f"{e['arm']} gripper {e['kind']}s",
             'kind': 'contact', 'outcome': m.get('outcome'), 'note': m.get('note', ''), 'arm': e['arm'],
@@ -334,7 +354,8 @@ def merge_annotation(answer: dict, start: float, task_start: float, task_end: fl
         'tasks': [{
             'start_s': task_start - start, 'end_s': task_end - start, 'task': task['task'], 'skill': task['skill'],
             'actions': sorted({e['verb'] for e in out_events if e['verb'] and e['verb'] != 'reset'}),
-            'objects': task['objects'], 'outcome': task['outcome'], 'success_predicate': task['success_predicate'],
+            'objects': task_objects(task, out_events, key_events, answer['state_changes']),
+            'outcome': task['outcome'], 'success_predicate': task['success_predicate'],
             'completed_at_s': completed, 'instruction_variants': task['instruction_variants'],
             'confidence': task['confidence'],
             # coverage dimensions (spec 2.9); None in answers written before they were asked
@@ -494,3 +515,60 @@ def apply_vocabulary(answer: dict, maps: dict) -> dict:
                 'object_class': g.get('object_class') if g else x.get('object_class')}
     a['objects'] = list(objects.values())
     return a
+
+
+# ---------------------------------------------------------------- delivery
+SPEC_LAYERS = ['schema_version', 'episode_id', 'annotation_source', 'annotation_model', 'prompt_mode', 'given_prompt',
+    'tasks', 'events', 'key_events', 'state_changes', 'recoveries', 'issues', 'objects', 'scene_graph', 'created_ts_utc']
+
+
+def find_annotation(annotations: Sequence[dict], head_video: str, task_start: float, task_end: float) -> Optional[dict]:
+    """
+    The annotation (08 / 09, per dock-to-dock episode) of the head video whose measured task
+    interval overlaps the given one (head video seconds) most; None if none overlaps.
+    """
+    best, best_overlap = None, 0.0
+    for a in annotations:
+        if a.get('source', {}).get('head_video') != head_video:
+            continue
+        m = a['measured']
+        overlap = min(m['task_end'], task_end) - max(m['task_start'], task_start)
+        if overlap > best_overlap:
+            best, best_overlap = a, overlap
+    return best
+
+
+def delivery_annotation(annotation: dict, first_frame_time: float, duration: float, episode_id: str) -> dict:
+    """
+    annotations.json (spec 2.7) of a delivered episode from the annotation of the dock-to-dock
+    episode it was cut from: times moved from that episode's start (measured start, head video
+    seconds) to the delivered episode's first frame (first_frame_time, head video seconds) and
+    kept inside [0, duration): spans clipped, moments outside dropped. Only the spec layers.
+    """
+    shift = annotation['measured']['start'] - first_frame_time
+    inside = lambda t: t is not None and 0.0 <= t + shift < duration
+    moved = lambda t: None if t is None else t + shift
+
+    def clip(item, a='start_s', b='end_s'):
+        s, e = max(item[a] + shift, 0.0), min(item[b] + shift, duration)
+        return None if e <= s else {**item, a: s, b: e}
+
+    out = {k: annotation.get(k) for k in SPEC_LAYERS}
+    out['episode_id'] = episode_id
+    tasks = list()
+    for t in annotation['tasks']:
+        c = clip(t)
+        if c is not None:
+            c['completed_at_s'] = moved(t['completed_at_s']) if inside(t['completed_at_s']) else None
+            tasks.append(c)
+    out['tasks'] = tasks
+    out['events'] = [c for c in (clip(e) for e in annotation['events']) if c is not None]
+    out['key_events'] = [{**k, 't_s': k['t_s'] + shift,
+        **({'measured_t_begin_s': k['measured_t_begin_s'] + shift} if 'measured_t_begin_s' in k else {})}
+        for k in annotation['key_events'] if inside(k['t_s'])]
+    out['state_changes'] = [{**x, 't_s': x['t_s'] + shift} for x in annotation['state_changes'] if inside(x['t_s'])]
+    out['issues'] = [{**x, 't_s': x['t_s'] + shift} for x in annotation['issues'] if inside(x['t_s'])]
+    out['scene_graph'] = [{**x, 't_s': x['t_s'] + shift} for x in annotation['scene_graph'] if inside(x['t_s'])]
+    out['recoveries'] = [{**x, 'failure_t_s': x['failure_t_s'] + shift, 'recovered_at_s': moved(x.get('recovered_at_s'))}
+        for x in annotation['recoveries'] if inside(x['failure_t_s'])]
+    return out

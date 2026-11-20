@@ -1,5 +1,5 @@
 {
-  "source_session": "/home/humyn-labs/Videos/20261116/task1",
+  "source_session": "task1",
   "head_mapping_videos": [
     "head_mapping_C3501326502664_2026.11.16_16.53.16.285550"
   ],
@@ -38,7 +38,7 @@
   },
   "line_delay_us": 5.424063116370808,
   "readout_ms": 11.0,
-  "wrist_clocks": "audio sync + motion sync (/home/humyn-labs/Videos/20261116/task1/tag_tracking/wrist_sync.json)",
+  "wrist_clocks": "audio sync + motion sync (wrist_sync.json)",
   "T_wrist_tcp": {
     "right_cube": [
       [

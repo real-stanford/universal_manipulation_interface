@@ -9,6 +9,8 @@ Bring one camera's OpenImuCameraCalibrator result into the repo calibration
 Prints the quality numbers to check and the lines for the tag tracking config.
 
 python scripts/import_openicc_calibration.py -i ~/openicc_calib/set2_head -n set2_head -s C3501326495617
+Translation not estimated (too little rotation in the cam_imu video): HERO12 mean of the good calibrations
+python scripts/import_openicc_calibration.py -i ~/openicc_calib/set2_left -n set2_left -s C3501326501951 --translation_mm=-0.2,-22.2,4.4
 """
 # %%
 import sys
@@ -35,7 +37,10 @@ import numpy as np
 @click.option('-c', '--calib_dir', default='example/tag_tracking', help='Repo calibration directory')
 @click.option('-t', '--template', default='example/tag_tracking/gopro12_wide_fisheye_setting_720.yaml',
     help='IMU noise setting to start from')
-def main(input, name, serial, calib_dir, template):
+@click.option('--translation_mm', default=None,
+    help='x,y,z: replace the estimated camera-IMU translation (t_i_c, mm), e.g. the HERO12 mean '
+    '-0.2,-22.2,4.4 when the cam_imu video had too little rotation; the estimate is kept as t_i_c_estimated')
+def main(input, name, serial, calib_dir, template, translation_mm):
     source = pathlib.Path(os.path.expanduser(input)).absolute()
     calib_dir = pathlib.Path(calib_dir).absolute()
     cams = sorted(source.glob('cam/cam_calib_*.json'))
@@ -48,6 +53,11 @@ def main(input, name, serial, calib_dir, template):
     shutil.copy2(cams[0], cam_out)
     cam_imu = json.load(cam_imus[0].open('r'))
     cam_imu.pop('trajectory', None)
+    if translation_mm is not None:
+        x, y, z = (float(v) / 1000 for v in translation_mm.split(','))
+        cam_imu['t_i_c_estimated'] = cam_imu['t_i_c']
+        cam_imu['t_i_c'] = {'x': x, 'y': y, 'z': z}
+        cam_imu['t_i_c_source'] = f'set by import_openicc_calibration.py --translation_mm {translation_mm} (not this camera\'s estimate)'
     cam_imu_out = target.joinpath('cam_imu', cam_imus[0].name)
     json.dump(cam_imu, cam_imu_out.open('w'), indent=4)
     setting = calib_dir.joinpath(f'gopro12_wide_fisheye_setting_720_{serial}.yaml')
@@ -61,7 +71,10 @@ def main(input, name, serial, calib_dir, template):
     print(f"  intrinsics: {intr['nr_calib_images']} views, reprojection error {intr['final_reproj_error']:.3f} px")
     print(f"  camera-IMU: reprojection error {cam_imu['final_reproj_error']:.3f} px, "
         f"translation {np.round(t_mm, 1).tolist()} mm")
-    if np.linalg.norm(t_mm) < 5.0:
+    if translation_mm is not None:
+        e = cam_imu['t_i_c_estimated']
+        print(f"  translation set by --translation_mm (estimated {np.round(np.array([e['x'], e['y'], e['z']]) * 1000, 1).tolist()} mm)")
+    elif np.linalg.norm(t_mm) < 5.0:
         print("  WARNING: camera-IMU translation near 0: not estimated (too little motion in the cam_imu video)")
     print(f"Saved {cam_out}\n      {cam_imu_out}\n      {setting}")
     rel = lambda p: os.path.relpath(p, calib_dir)

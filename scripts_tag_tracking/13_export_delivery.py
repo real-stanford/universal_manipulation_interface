@@ -7,15 +7,23 @@ directory per episode:
   <output>/<episode_id>/episode.json     identity, provenance, clocks, task, outcome (2.4)
   <output>/<episode_id>/sensors.json     cameras, wrist IMUs, TCP poses, grippers, tag tracker (2.5)
   <output>/<episode_id>/frames.parquet   one row per head camera frame (primary camera) (2.6)
+  <output>/<episode_id>/annotations.json event timeline (2.7), where the session is annotated
   <output>/manifest.parquet              one row per episode of every session in <output>, written last (2.3)
 
 Only measured or declared values: frames.parquet rows stay where tracking is
 lost, with null pose and pose_valid false (umi.tag_tracking.delivery, nothing
 filled in); what only the recording team knows (vendor, dataset, task text,
 consent, license, ...) comes from the delivery yaml (umi.tag_tracking.delivery_config)
-and is null where not declared. Not part of this export: annotations.json (no
-annotations), success / outcome (null / unknown), validation_status 'not_run'
-(no quality checks).
+and is null where not declared.
+
+annotations.json: from the session's annotations (08_annotate_episodes.py / 09, per
+dock-to-dock episode, tag_tracking/annotations), the one whose task interval overlaps the
+episode's, with its times moved to the episode's first frame and clipped to the episode
+(umi.tag_tracking.annotation.delivery_annotation). It also gives the task text and family
+where the delivery yaml declares none, the outcome / success, the failure spans
+(episode.json events) and annotation_source. Episodes without an annotation: no
+annotations.json, outcome 'unknown', success null. validation_status 'not_run' (no
+quality checks).
 
 Clock: utc_unix. Session times (audio + motion synchronized, 06a / 03s) are
 mapped to UTC by the head camera's own start time (GoPro creation_time +
@@ -56,7 +64,8 @@ from umi.common.timecode_util import mp4_get_start_utc
 from umi.tag_tracking.camera_metadata import camera_record
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.delivery import episode_frames, gripper_streams
-from umi.tag_tracking.delivery_config import load_delivery_config, session_declarations
+from umi.tag_tracking.delivery_config import load_delivery_config, session_declarations, TASK_FAMILIES
+from umi.tag_tracking.annotation import find_annotation, delivery_annotation
 from umi.tag_tracking.imu import load_imu, load_cam_imu_calibration, wrist_imu_time_offset
 from umi.tag_tracking.session import get_session_videos
 from umi.tag_tracking.wrist_sync import wrist_corrections, head_readout
@@ -178,6 +187,10 @@ MANIFEST_COLUMNS = ['schema_version', 'container_format', 'vendor_name', 'datase
     'consent_reference', 'license_reference', 'validation_status', 'created_at_utc', 'created_ts_utc']
 
 
+# manifest columns the spec marks optional: left out when no episode has a value
+OPTIONAL_COLUMNS = ['environment_id', 'operator_id', 'station_id', 'object_tags', 'scene_tags']
+
+
 def write_manifest(output: pathlib.Path, rows: list):
     """
     manifest.parquet (2.3), one row per episode; rows of earlier runs kept unless re-exported.
@@ -206,7 +219,9 @@ def write_manifest(output: pathlib.Path, rows: list):
         'nominal_frame_rate_hz': pa.float64(), 'object_tags': pa.list_(pa.string()), 'scene_tags': pa.list_(pa.string()),
         **{k: pa.bool_() for k in ('has_proprio', 'has_actions', 'has_ee_pose', 'has_gripper', 'has_calibration',
             'has_kinematics', 'success', 'has_failure_spans', 'has_event_timeline')}}
-    table = pa.table({k: pa.array([r[k] for r in all_rows], types.get(k, pa.string())) for k in MANIFEST_COLUMNS})
+    columns = [k for k in MANIFEST_COLUMNS if k not in OPTIONAL_COLUMNS
+        or any(r.get(k) not in (None, []) for r in all_rows)]
+    table = pa.table({k: pa.array([r.get(k) for r in all_rows], types.get(k, pa.string())) for k in columns})
     tmp = path.with_suffix('.parquet.tmp')
     pq.write_table(table, tmp)
     tmp.replace(path)
@@ -221,7 +236,9 @@ def write_manifest(output: pathlib.Path, rows: list):
 @click.option('-o', '--output', required=True, help='Delivery directory (episode directories + manifest.parquet)')
 @click.option('-e', '--episodes', default=None, help='Comma separated episode indices of the plan, default all')
 @click.option('-j', '--num_workers', type=int, default=None, help='MCAP files written in parallel, default all cores')
-def main(input, config, delivery, output, episodes, num_workers):
+@click.option('--no_annotations', is_flag=True, default=False,
+    help='Leave the annotations out: no annotations.json, task and outcome only as declared in the delivery yaml')
+def main(input, config, delivery, output, episodes, num_workers, no_annotations):
     import pyarrow.parquet as pq
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     output = pathlib.Path(os.path.expanduser(output)).absolute()
@@ -314,6 +331,9 @@ def main(input, config, delivery, output, episodes, num_workers):
             future.result()
 
     manifest_rows = list()
+    # annotations (08 / 09) per dock-to-dock episode, moved onto the delivered episodes
+    annotations = list() if no_annotations else \
+        [json.load(p.open('r')) for p in sorted(session.glob('tag_tracking/annotations/*_ep*.json'))]
     for k in indices:
         e, x = plan[k], episode_info[k]
         head, (a, b) = x['head'], x['head_range']
@@ -321,20 +341,32 @@ def main(input, config, delivery, output, episodes, num_workers):
         track = h['track']
         n_grippers = len(e['grippers'])
         directory = x['dir']
-        # frames.parquet: the head frames of the episode
-        start = float(track['time'][a])
+        # frames.parquet: one row per head frame in episode.mcap. The head video there starts at the
+        # keyframe before the task (not re-encoded), so the rows start at that keyframe too: the lead-in
+        # frames before the task have rows (null pose where not tracked), camera_frame_index starts at 0
+        first_frame = first_video_frame(str(head['dir'].joinpath('raw_video.mp4')), a)
+        start = float(track['time'][first_frame])
         end = float(track['time'][b]) if b < len(track['time']) else float(track['time'][-1]) + 1e-3
         out = episode_frames(track['time'], track['head']['T_world_cam'], track['head']['is_valid'], start, end,
             h['grippers'], row_time_offset=h['readout'] / 2)
         rows = out['frames']
-        assert len(rows['time']) == b - a, f"episode {k}: {len(rows['time'])} rows for head frames {a}-{b}"
-        first_frame = first_video_frame(str(head['dir'].joinpath('raw_video.mp4')), a)
+        n_rows = b - first_frame
+        assert len(rows['time']) == n_rows, f"episode {k}: {len(rows['time'])} rows for head frames {first_frame}-{b}"
         table = frames_table(x['episode_id'], rows, h['utc_shift'], head['start_timestamp'], first_frame, created)
         pq.write_table(table, directory.joinpath('frames.parquet'))
         row_ns = table['timestamp_ns'].to_numpy()
         frame_rate = float(1e9 / np.median(np.diff(row_ns))) if len(row_ns) > 1 else None
-        capture_start = (head['start_timestamp'] + float(track['time'][a]) + h['utc_shift'])
-        capture_end = capture_start + (b - a) / float(head['fps'])
+        capture_start = (head['start_timestamp'] + float(track['time'][first_frame]) + h['utc_shift'])
+        capture_end = capture_start + n_rows / float(head['fps'])
+        # the task (bang to bang) inside the episode, seconds on the primary camera clock from the first frame
+        task_interval_s = [(a - first_frame) / float(head['fps']), (b - first_frame) / float(head['fps'])]
+        source_annotation = find_annotation(annotations, head['name'], float(track['time'][a]), float(track['time'][b - 1]))
+        annotation = None if source_annotation is None else delivery_annotation(source_annotation,
+            float(track['time'][first_frame]), n_rows / float(head['fps']), x['episode_id'])
+        if annotation is not None:
+            json.dump(annotation, directory.joinpath('annotations.json').open('w'), indent=2)
+        elif directory.joinpath('annotations.json').is_file():
+            directory.joinpath('annotations.json').unlink()  # from an earlier export
 
         # sensors.json
         counts = channel_counts(directory.joinpath('episode.mcap'))
@@ -402,7 +434,8 @@ def main(input, config, delivery, output, episodes, num_workers):
                 'extrinsic_44': None if T_cam_imu is None else mat44(T_cam_imu),
                 'extrinsic_direction': f'wrist_{side}_optical from imu_{side} (child in parent)',
                 'is_primary': False,
-                'calibration_source': 'measured' if T_cam_imu is not None else 'none',
+                'calibration_source': 'none' if T_cam_imu is None else
+                    ('approximate' if 't_i_c_source' in ci else 'measured'),
             }, {
                 'sensor_id': f'tcp_{side}', 'sensor_type': 'pose_tracker', 'role': f'wrist_{side}',
                 'parent_frame': 'world', 'child_frame': f'tcp_{side}',
@@ -457,7 +490,7 @@ def main(input, config, delivery, output, episodes, num_workers):
                 'mcap_topic': '/head/imu', 'message_schema': 'umi.msg.ImuSample',
                 'extrinsic_44': mat44(np.linalg.inv(T_imu_cam)),
                 'extrinsic_direction': 'head_optical from imu_head (child in parent)',
-                'is_primary': False, 'calibration_source': 'measured',
+                'is_primary': False, 'calibration_source': 'approximate' if 't_i_c_source' in ci else 'measured',
             })
             streams.append({'id': 'imu_head', 'type': 'imu', 'sample_count': counts.get('/head/imu', 0),
                 'native_rate_hz': head_imu_rate})
@@ -476,6 +509,17 @@ def main(input, config, delivery, output, episodes, num_workers):
             r['created_ts_utc'] = utc_iso(created.timestamp())
         json.dump(sensors, directory.joinpath('sensors.json').open('w'), indent=2)
 
+        # task and outcome: declared in the delivery yaml first, else from the annotation
+        task = annotation['tasks'][0] if annotation and annotation['tasks'] else None
+        # per episode from its annotation, else as declared for the session
+        outcome = task['outcome'] if task and task.get('outcome') else (s.get('outcome') or 'unknown')
+        success = {'success': True, 'failure': False, 'partial': False, 'aborted': False}.get(outcome)
+        task_family = s.get('task_family') or (task['skill'] if task and task.get('skill') in TASK_FAMILIES else None)
+        object_classes = sorted({o.get('object_class') for o in (annotation or {}).get('objects', [])
+            if task and o.get('name') in task.get('objects', []) and o.get('object_class')})
+        failures = [{'start_s': r['failure_t_s'], 'end_s': r['recovered_at_s'] if r.get('recovered_at_s') is not None
+            else n_rows / float(head['fps']), 'kind': 'failure', 'failure_kind': r.get('failure_kind'),
+            'text': r.get('failure'), 'recovered': r.get('recovered')} for r in (annotation or {}).get('recoveries', [])]
         # episode.json
         widths = {SIDES[g]: [0.0, float(h['grippers'][g]['gripper_range']['max_width']
             - h['grippers'][g]['gripper_range']['min_width'])] for g in range(n_grippers)}
@@ -488,8 +532,11 @@ def main(input, config, delivery, output, episodes, num_workers):
             'source_uri': source_uri,
             'source_files': {c: pathlib.Path(camera['video_path']).parent.name for c, camera in
                 zip([*(f'wrist_{SIDES[g]}' for g in range(n_grippers)), 'head'], e['cameras'])},
+            # frames of the original videos: the task, and the head frames the episode (rows) starts at
             'source_frames': {c: [int(v) for v in camera['video_start_end']] for c, camera in
                 zip([*(f'wrist_{SIDES[g]}' for g in range(n_grippers)), 'head'], e['cameras'])},
+            'source_first_frame_head': int(first_frame),
+            'task_interval_s': task_interval_s,
             'gripper_type': d['gripper_type'],
             'gripper_range': [0.0, max(v[1] for v in widths.values())],
             'gripper_range_per_arm': widths,
@@ -503,16 +550,18 @@ def main(input, config, delivery, output, episodes, num_workers):
             'clock_sync_method': sync_record['method'],
             'base_frame': f'world: environment tag map, origin at tag {world_tag}',
             'pose_transform_direction': 'world_from_tcp (pose maps tcp coordinates to world)',
-            'task_text': s.get('task_text'), 'task_family': s.get('task_family'),
-            'success': None, 'outcome': 'unknown',
+            'task_text': s.get('task_text') or (task['task'] if task else None), 'task_family': task_family,
+            'success': success, 'outcome': outcome,
+            **({'events': failures} if failures else {}),
             'operator_id': s.get('operator_id'), 'station_id': s.get('station_id'),
             'environment_id': s.get('environment_id'),
-            'scene_tags': s.get('scene_tags') or [], 'object_tags': s.get('object_tags') or [],
+            'scene_tags': s.get('scene_tags') or [], 'object_tags': s.get('object_tags') or object_classes,
             'consent_reference': s.get('consent_reference') or d['consent_reference'],
             'license_reference': d['license_reference'], 'anonymization_state': d['anonymization_state'],
             'created_at_utc': created.date().isoformat(), 'created_ts_utc': utc_iso(created.timestamp()),
         }
-        json.dump(episode, directory.joinpath('episode.json').open('w'), indent=2)
+        # fields without a value are left out (not written as null)
+        json.dump({k: v for k, v in episode.items() if v is not None}, directory.joinpath('episode.json').open('w'), indent=2)
 
         files = [{'path': f"{x['episode_id']}/{p.name}", 'byte_size': p.stat().st_size, 'sha256': sha256(p)}
             for p in sorted(directory.iterdir()) if p.is_file()]
@@ -523,21 +572,25 @@ def main(input, config, delivery, output, episodes, num_workers):
                 'operator_id', 'station_id', 'environment_id', 'nominal_frame_rate_hz', 'object_tags', 'scene_tags',
                 'anonymization_state', 'consent_reference', 'license_reference', 'created_ts_utc')},
             'container_format': CONTAINER,
-            'primary_frame_count': int(b - a),
+            'primary_frame_count': int(n_rows),
             'cameras': cameras, 'streams': streams, 'files': files,
             'total_byte_size': int(sum(f['byte_size'] for f in files)),
             'has_proprio': False, 'has_actions': False, 'has_ee_pose': True, 'has_gripper': True,
             'has_calibration': True, 'has_kinematics': False,
-            'task_id': f"{d['dataset_name'] or 'dataset'}:{session.name}",
-            'has_failure_spans': False, 'has_event_timeline': False,
-            'collection_mode': s.get('collection_mode'), 'n_tasks': 1,
+            # the session (one task per session); prefixed with the dataset name where declared
+            'task_id': f"{d['dataset_name']}:{session.name}" if d['dataset_name'] else session.name,
+            'has_failure_spans': bool(failures), 'has_event_timeline': annotation is not None,
+            'collection_mode': s.get('collection_mode'), 'n_tasks': len(annotation['tasks']) if annotation else 1,
             'pose_source': 'visual_inertial', 'gripper_width_source': 'marker',
-            'annotation_source': 'human',
+            # who wrote the task text, spans and event timeline: the annotation's source, a person
+            # where only the declared task text exists, else none
+            'annotation_source': annotation['annotation_source'] if annotation else ('human' if s.get('task_text') else None),
             'validation_status': 'not_run',
             'created_at_utc': created.date(),
         })
-        print(f"{x['episode_id']} (plan episode {k}): {b - a} frames, {utc_iso(capture_start)}, pose valid "
-            f"{rows['pose_valid'].mean() * 100:.1f}%, {', '.join(f'{t} {n}' for t, n in sorted(counts.items()))}")
+        print(f"{x['episode_id']} (plan episode {k}): {n_rows} frames ({a - first_frame} lead-in), {utc_iso(capture_start)}, pose valid "
+            f"{rows['pose_valid'].mean() * 100:.1f}% (task part {rows['pose_valid'][a - first_frame:].mean() * 100:.1f}%), "
+            f"{', '.join(f'{t} {n}' for t, n in sorted(counts.items()))}")
 
     n = write_manifest(output, manifest_rows)
     missing = [k for k in ('vendor_name', 'dataset_name', 'delivery_id', 'robot_model', 'license_reference',

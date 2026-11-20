@@ -21,10 +21,11 @@ def load_gripper_config(path: Optional[str]) -> Optional[dict]:
                                     # along the camera optical axis [m], measured
         cam_to_center_height: 0.075 # optional, this gripper's TCP geometry, overrides the
         tcp_offset: 0.177           # shared values above (tag tracking calibrate_setup.py)
-        range_camera: C3501325427851  # optional: the opening range (gripper_range.json) is from
-                                    # this camera's gripper calibration video (the finger tag
-                                    # distance is the gripper's, the camera then needs its own
-                                    # entry with the same finger tags)
+        range_camera: C3501325427851  # optional: in sessions without this camera's own gripper
+                                    # calibration video, the opening range (gripper_range.json)
+                                    # is from this camera's (the finger tag distance is the
+                                    # gripper's, the camera then needs its own entry with the
+                                    # same finger tags)
     """
     if path is None:
         return None

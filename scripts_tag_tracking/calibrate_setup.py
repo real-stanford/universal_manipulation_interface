@@ -195,7 +195,7 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
             'tag_rms_px': {int(k): v for k, v in known['tag_rms_px'].items()},
             'variance_factor': known['variance_factor'], 'n_frames_used': known['n_frames_used'],
             'n_frames_consistent': known['n_frames_consistent']}
-        shape_sources[name] = {'source': f"{path}:{source_body}", 'estimated_here_minus_source_mm': agreement}
+        shape_sources[name] = {'source': f"{os.path.join(os.path.basename(os.path.dirname(os.path.abspath(path))), os.path.basename(path))}:{source_body}", 'estimated_here_minus_source_mm': agreement}
         print(f"  {name}: shape from {path}:{source_body}; estimated here vs that shape (mm): "
             + ', '.join(f"tag {t} {d:.1f}" for t, d in sorted(agreement.items())))
     for name, x in results.items():
@@ -264,7 +264,7 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
     json.dump(tcp_output, output.joinpath('gripper_tcp.json').open('w'), indent=2)
 
     json.dump({
-        'source_session': str(session),
+        'source_session': session.name,   # folder name only: reports are shared, paths are machine-specific
         'head_mapping_videos': [p.parent.name for p in mapping_paths],
         'head_task_video': head['name'],
         'n_frames': {name: len(f) for name, f in body_frames.items()},
@@ -273,7 +273,7 @@ def main(input, config, output, per_pair, max_samples, max_speed, tcp_offset, tc
         'shape_sources': shape_sources,
         'line_delay_us': line_delay * 1e6,
         'readout_ms': None if readout_time is None else readout_time * 1000,
-        'wrist_clocks': 'audio sync' if wrist_sync is None else f'audio sync + motion sync ({wrist_sync})',
+        'wrist_clocks': 'audio sync' if wrist_sync is None else f'audio sync + motion sync ({os.path.basename(wrist_sync)})',
         'T_wrist_tcp': {name: T.tolist() for name, T in T_wrist_tcps.items()},
         'cube_to_wrist': report_grippers
     }, output.joinpath('report.json').open('w'), indent=2)

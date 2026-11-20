@@ -1,0 +1,122 @@
+# Tag tracking config for station3, drafted by scripts_tag_tracking/propose_station_config.py
+# from station3 session task01 (2026-11-20, template tag_tracking.yaml).
+# Filled in by hand: cameras / head_imu / gripper_imu (set2_head, set2_left imported
+# 2026-11-21; C3501326502891 = gripper1 of 2026-11-16), environment tags of 2026-11-16.
+# Same grippers as 2026-11-16: right fingers 0/1 + cube 2-5 (now on camera C3501326501951),
+# left fingers 7/6 + cube 8-11 on C3501326502891; dock tags 46, 47 as on 2026-11-16.
+#
+# cameras: head C3501326495617, right C3501326501951, left C3501326502891
+# right camera C3501326501951, GX010136.MP4: finger candidates 0 (100%, x 0.24), 1 (100%, x 0.79), 7 (65%, x 0.94)
+# right finger pair asymmetry 0.03 (0 = mirror positions)
+# left camera C3501326502891, GX019306.MP4: finger candidates 1 (73%, x 0.07), 6 (100%, x 0.77), 7 (100%, x 0.23)
+# left finger pair asymmetry 0.03 (0 = mirror positions)
+# right finger tags 0 (image left) / 1 (image right)
+# left finger tags 7 (image left) / 6 (image right)
+# head takes: cube tags 2-3 seen together in 679 frames, 1.0 sides apart
+# head takes: cube tags 2-4 seen together in 413 frames, 1.0 sides apart
+# head takes: cube tags 2-5 seen together in 352 frames, 1.0 sides apart
+# head takes: cube tags 2-8 seen together in 335 frames, 7.3 sides apart
+# head takes: cube tags 2-9 seen together in 970 frames, 7.1 sides apart
+# head takes: cube tags 2-10 seen together in 747 frames, 6.9 sides apart
+# head takes: cube tags 2-11 seen together in 361 frames, 6.4 sides apart
+# head takes: cube tags 3-4 seen together in 245 frames, 1.0 sides apart
+# head takes: cube tags 3-5 seen together in 209 frames, 1.1 sides apart
+# head takes: cube tags 3-8 seen together in 302 frames, 6.3 sides apart
+# head takes: cube tags 3-9 seen together in 683 frames, 6.6 sides apart
+# head takes: cube tags 3-10 seen together in 647 frames, 5.2 sides apart
+# head takes: cube tags 3-11 seen together in 384 frames, 6.1 sides apart
+# head takes: cube tags 4-8 seen together in 67 frames, 3.0 sides apart
+# head takes: cube tags 4-9 seen together in 380 frames, 6.8 sides apart
+# head takes: cube tags 4-10 seen together in 421 frames, 6.2 sides apart
+# head takes: cube tags 4-11 seen together in 190 frames, 6.4 sides apart
+# head takes: cube tags 5-8 seen together in 230 frames, 7.2 sides apart
+# head takes: cube tags 5-9 seen together in 293 frames, 7.3 sides apart
+# head takes: cube tags 5-10 seen together in 265 frames, 6.9 sides apart
+# head takes: cube tags 5-11 seen together in 3 frames, 4.8 sides apart
+# head takes: cube tags 8-9 seen together in 319 frames, 1.0 sides apart
+# head takes: cube tags 8-10 seen together in 250 frames, 1.0 sides apart
+# head takes: cube tags 9-10 seen together in 704 frames, 0.9 sides apart
+# head takes: cube tags 9-11 seen together in 408 frames, 1.0 sides apart
+# head takes: cube tags 10-11 seen together in 289 frames, 1.0 sides apart
+# right wrist takes: sees cube [2, 3, 4, 5] 0%, cube [8, 9, 10, 11] 7% (summed share of frames per tag)
+# left wrist takes: sees cube [2, 3, 4, 5] 2%, cube [8, 9, 10, 11] 0% (summed share of frames per tag)
+# cube [2, 3, 4, 5] on the right gripper, [8, 9, 10, 11] on the left
+# head mapping: environment tags [16, 20, 21, 22, 23, 45, 46, 47]
+# WARNING head takes show environment-size tags not in the mapping: [14]
+# WARNING tags without a size in the aruco config (ignored): [37]
+# docked: 104 head frames with both cubes resting within 0.35 m of an environment tag
+# right cube docked, closest environment tag: 46 54% (0.20 m), 47 33% (0.20 m), 45 9% (0.29 m)
+# left cube docked, closest environment tag: 47 51% (0.20 m), 46 36% (0.20 m), 21 9% (0.32 m)
+# dock tags [46, 47] (closest to a docked cube in >= 25% of the docked frames)
+aruco_config: aruco_config.yaml
+corner_noise: corner_noise.json
+gripper_config: gripper_config_station3.yaml
+head_camera: C3501326495617
+# setup calibration from station3 task01 (calibrate_setup.py, 2026-11-21): tag map agrees with
+# setup_20261116 within 2-8 mm on the 9 shared tags (tags not moved); cube -> wrist spread ~2 mm
+setup_calibration: setup_station3
+head_imu:
+  cam_imu_calibration: openicc/set2_head/cam_imu/cam_imu_calib_result_GX010157.json
+  noise_setting: gopro12_wide_fisheye_setting_720_C3501326495617.yaml
+  imu_time_offset: gpmf
+gripper_imu:
+  C3501326501951:   # right hand; translation = HERO12 mean (its estimate 2.9 mm), see the json
+    cam_imu_calibration: openicc/set2_left/cam_imu/cam_imu_calib_result_GX010132.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326501951.yaml
+    imu_time_offset: gpmf
+  C3501326502891:   # left hand, as on 2026-11-16 (OpenICC gripper1)
+    cam_imu_calibration: openicc/gripper1/cam_imu/cam_imu_calib_result_GX019255.json
+    noise_setting: gopro12_wide_fisheye_setting_720.yaml
+    imu_time_offset: gpmf
+accuracy:
+  position_std: 0.0061
+  rotation_std: 3.5
+cameras:
+  C3501326495617: openicc/set2_head/cam/cam_calib_GX010158_fi_1.0.json
+  C3501326501951: openicc/set2_left/cam/cam_calib_GX010133_fi_1.0.json
+  C3501326502891: openicc/gripper1/cam/cam_calib_GX019254_fi_1.0.json
+bodies:
+  environment:
+    static: true
+    # same room and tags as 2026-11-16 (tag_tracking.yaml); task01 head mapping shows
+    # 16, 20-23, 45-47, the takes also 14
+    tags: [13, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35,
+           38, 39, 40, 41, 44, 45, 46, 47]
+  right_cube:
+    tags:
+    - 2
+    - 3
+    - 4
+    - 5
+    gripper_camera: C3501326501951
+    robot_index: 0
+  left_cube:
+    tags:
+    - 8
+    - 9
+    - 10
+    - 11
+    gripper_camera: C3501326502891
+    robot_index: 1
+episodes:
+  dock_tags:
+  - 46
+  - 47
+  boundary: dock
+  dock_exit_distance: 0.45
+  still_sec: 1.0
+  gyro_still: 0.04
+  dock_distance: 0.35
+  min_dock_frames: 15
+  bang_accel: 5.0
+  bang_tolerance: 0.02
+  bang_search_tolerance: 0.06
+  bang_merge_sec: 0.5
+  audio_ratio: 5.0
+  audio_tolerance: 0.015
+  audio_lag_search: 0.3
+  lag_accel: 10.0
+  dock_window: 0.25
+  idle_margin: 1.0
+  min_episode_sec: 3.0
+  max_gap_sec: 0.25
