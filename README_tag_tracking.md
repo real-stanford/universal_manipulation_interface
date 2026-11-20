@@ -35,6 +35,94 @@ For a recording day, in order (details in the sections below):
 | 3. Sessions | tracking pipeline -> `dataset_plan.pkl` | session |
 | 4-6. Checks, dataset, delivery | renders, replay buffer, Odyssey delivery | session |
 
+## End to end example
+
+One recording day of station3 (2026-11-20), from the uploaded GoPro files to exported episodes.
+Two locations to replace with your own:
+- `s3://my-bucket/UMI_Collection`: where the cameras' files are uploaded, one folder per
+  station and day with `head/`, `left/`, `right/` inside (as in Recording below);
+- `~/umi_data`: a local folder for the sessions being processed (about 25 GB per task).
+
+All commands from the repository root, in the `umi` environment. The aws CLI must be logged in
+(`aws sts get-caller-identity` prints your account; if the token expired, log in again).
+
+**1. Propose the tasks of the day** (reads the video headers and the short clips on S3,
+nothing is downloaded; 10-30 min):
+
+```
+python scripts_tag_tracking/sort_recordings.py s3://my-bucket/UMI_Collection/station3/2026-11-20 --save ~/umi_data/station3/inventory_2026-11-20.json --propose ~/umi_data/station3/tasks_2026-11-20.yaml
+```
+
+Open `~/umi_data/station3/tasks_2026-11-20.yaml`: one entry per task (`task01`, `task02`, ...)
+with its takes, gripper calibration and head mapping; the comments say why each short clip was
+taken as what, and what was left out. Edit it if something is wrong (recording numbers as
+printed by the command).
+
+**2. Create the sessions**: copies each task's videos on S3 to
+`industrial_data/<task>/raw_videos/` (with `pairs.csv`); videos already there are skipped, so
+it can be rerun:
+
+```
+python scripts_tag_tracking/sort_recordings.py s3://my-bucket/UMI_Collection/station3/2026-11-20 --tasks ~/umi_data/station3/tasks_2026-11-20.yaml -o s3://my-bucket/UMI_Collection/station3/industrial_data
+```
+
+**3. Download a session:**
+
+```
+aws s3 sync s3://my-bucket/UMI_Collection/station3/industrial_data/task02 ~/umi_data/station3/industrial_data/task02
+```
+
+**4. Process it** (all steps; the station's config and setup calibration are in the repo;
+1-3 h depending on the length and the cores):
+
+```
+python run_tag_tracking_pipeline.py -c example/tag_tracking/tag_tracking_station3.yaml -nr ~/umi_data/station3/industrial_data/task02
+```
+
+The end of `~/umi_data/station3/industrial_data/task02/logs/16_export_plan.log` gives the yield:
+episodes, seconds used, and why episodes were dropped. Episodes with a short tracking gap are
+kept (pose marked not available in the gap) by exporting the plan again with `--keep_gaps`:
+
+```
+python scripts_tag_tracking/06_export_dataset_plan.py -i ~/umi_data/station3/industrial_data/task02 -c example/tag_tracking/tag_tracking_station3.yaml --keep_gaps
+```
+
+**5. Export the episodes.** MCAP files (`<session>/dataset_mcap/`):
+
+```
+python scripts_tag_tracking/07_export_mcap.py -i ~/umi_data/station3/industrial_data/task02 -c example/tag_tracking/tag_tracking_station3.yaml -j 4
+```
+
+Odyssey delivery: copy `example/tag_tracking/delivery.yaml` to `~/umi_data/station3/delivery.yaml`,
+fill in `delivery:` and one entry per session name (`task02:` with `task_text`, `task_family`,
+`operator_id`, `station_id`, `outcome`), then:
+
+```
+python scripts_tag_tracking/13_export_delivery.py -i ~/umi_data/station3/industrial_data/task02 -c example/tag_tracking/tag_tracking_station3.yaml -d ~/umi_data/station3/delivery.yaml -o ~/umi_data/station3/delivery --no_annotations -j 16
+```
+
+Repeat 3-5 for each task. Upload the delivery folder:
+
+```
+aws s3 sync ~/umi_data/station3/delivery s3://my-bucket/deliveries/station3_2026-11-20
+```
+
+**A new station** (cameras, room or cubes not set up before) needs, once, between steps 3 and 4:
+calibrated cameras (Camera calibration), a config (step 2 below:
+`propose_station_config.py` on the first session), and the setup calibration on that session:
+
+```
+python run_tag_tracking_pipeline.py -c example/tag_tracking/tag_tracking_station3.yaml --stop_after segment_episodes ~/umi_data/station3/industrial_data/task01
+python scripts_tag_tracking/calibrate_setup.py -i ~/umi_data/station3/industrial_data/task01 -c example/tag_tracking/tag_tracking_station3.yaml -o example/tag_tracking/setup_station3 -j 24
+```
+
+then `setup_calibration: setup_station3` in the config, and that session continues with
+`-sf use_setup`:
+
+```
+python run_tag_tracking_pipeline.py -c example/tag_tracking/tag_tracking_station3.yaml -sf use_setup -nr ~/umi_data/station3/industrial_data/task01
+```
+
 ## Calibration files
 
 `example/tag_tracking/` holds the calibration of our setups; all paths in the configs are relative to it.
