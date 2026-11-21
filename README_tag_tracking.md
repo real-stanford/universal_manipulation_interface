@@ -379,11 +379,15 @@ python scripts_tag_tracking/process_station.py <sessions> -c <config> [-w <local
 Per session, in order: download (`<sessions>` on `s3://`: to `-w`, files already there skipped),
 the pipeline (all steps, no render), the dataset plan again with `--keep_gaps` (unless
 `--no_keep_gaps`), with `--mcap` the MCAP files (`<session>/dataset_mcap/`; files of an earlier
-export are moved to `dataset_mcap_<date>_<time>/`), with `--upload` the MCAP files to
+export are deleted first; stops if the free disk is under 1.2 x the session's videos), with
+`--upload` the MCAP files to
 `<upload>/<session>/`. A failing session does not stop the others. At the end a summary per
 session: status, the failed step and its log, episodes and seconds used, MCAP files. Each
 session's output is also in `<session>/logs/process_station.log`. Without `--tasks`: every
 sub-folder with `raw_videos/`. The station's setup calibration must exist (step 2).
+`--start_from pipeline|plan|mcap|upload` resumes a session after a failure (the outputs of the
+earlier steps must be there), e.g. `--tasks task05 --start_from mcap` after freeing disk.
+Disk: the MCAP export needs the session's videos and its MCAP files at once, about 2 x the videos.
 
 Several stations on one machine, one after the other, one command: list them in a job file
 (`example/tag_tracking/process_jobs.yaml`: per station `sessions`, `config`, `workdir`,
