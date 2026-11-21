@@ -58,6 +58,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 
 # %%
+import collections
 import concurrent.futures
 import datetime
 import json
@@ -165,50 +166,97 @@ def s3_video_info(bucket: str, prefix: str, key: str, size: int) -> dict:
         'start': created.astimezone().replace(tzinfo=None).isoformat(), 'duration': duration, 'size_mb': size / 1e6}
 
 
-def s3_place(src: str, dst_dir: str):
-    dst = f"{dst_dir}/{src.rsplit('/', 1)[1]}"
-    bucket, key = split_s3(dst)
-    exists = subprocess.run(['aws', 's3api', 'head-object', '--bucket', bucket, '--key', key],
-        capture_output=True).returncode == 0
-    if not exists:
-        subprocess.run(['aws', 's3', 'cp', src, dst, '--only-show-errors'], check=True)
+def s3_size(url: str) -> Optional[int]:
+    bucket, key = split_s3(url)
+    r = subprocess.run(['aws', 's3api', 'head-object', '--bucket', bucket, '--key', key, '--query', 'ContentLength',
+        '--output', 'text'], capture_output=True, text=True)
+    return int(r.stdout.strip()) if r.returncode == 0 else None
+
+
+def s3_place(src: str, dst_dir: str, name: str):
+    """
+    Server-side copy of src to dst_dir/name; skipped if the same file (same size) is already
+    there, an error if another file is.
+    """
+    dst = f"{dst_dir}/{name}"
+    existing = s3_size(dst)
+    if existing is not None:
+        assert existing == s3_size(src), f"{dst} exists with another size than {src}: not overwritten"
+        return dst
+    subprocess.run(['aws', 's3', 'cp', src, dst, '--only-show-errors'], check=True)
     return dst
 
 
-def pairs_rows(groups: List[List[dict]], spec: dict, folders: List[str]) -> List[dict]:
+def session_files(groups: List[List[dict]], spec: dict) -> List[Tuple[str, str]]:
+    """
+    (file relative to the day folder, sub folder of raw_videos/) of a session (tasks.yaml entry):
+    every file of its recordings (a camera can have several in one recording), then the gripper
+    calibration and head mapping files.
+    """
+    out = [(v['file'], '') for k in spec.get('recordings', []) for v in groups[k]]
+    out += [(f, 'gripper_calibration') for f in spec.get('gripper_calibration', [])]
+    out += [(f, 'head_mapping') for f in spec.get('head_mapping', [])]
+    return out
+
+
+def placed_names(files: List[Tuple[str, str]]) -> Dict[str, str]:
+    """
+    File -> its name in the session: the camera's file name, prefixed with its camera folder
+    (left_GX010136.MP4) where files of two cameras with the same name would land in the same
+    raw_videos folder (each GoPro numbers its own files). The pipeline reads camera and time
+    from the video, not from the name.
+    """
+    count = collections.Counter((sub, f.split('/')[-1]) for f, sub in set(files))
+    return {f: f.split('/')[-1] if count[(sub, f.split('/')[-1])] == 1 else f"{f.split('/')[0]}_{f.split('/')[-1]}"
+        for f, sub in files}
+
+
+def pairs_rows(groups: List[List[dict]], spec: dict, folders: List[str],
+        names: Optional[Dict[str, str]] = None) -> List[dict]:
     """
     Rows of a session's pairs.csv: per recording of spec (tasks.yaml entry) its start / end,
-    per camera folder the file (name only, as in raw_videos/) and length, the shared time
-    all folders recorded, and a note on missing cameras or cameras stopping early;
-    then the gripper calibration and head mapping files.
+    per camera folder its file(s) (as named in raw_videos/, names: placed_names; several
+    joined with '; ' when the camera split or restarted the recording) and their total length,
+    the time all folders recorded together, and a note on missing cameras, cameras stopping
+    early, several files of a camera and gaps between them; then the gripper calibration and
+    head mapping files.
     """
+    name = lambda f: (names or {}).get(f, f.split('/')[-1])
     rows = list()
     for k in spec.get('recordings', []):
         group = groups[k]
         start, end = span(group)
-        by_folder = {v['folder']: v for v in group}
+        by_folder = dict()
+        for v in sorted(group, key=lambda v: v['start']):
+            by_folder.setdefault(v['folder'], list()).append(v)
         row = {'type': 'take', 'recording': k, 'start': f"{start:%Y-%m-%d %H:%M:%S}", 'end': f"{end:%H:%M:%S}"}
-        starts, ends = list(), list()
+        notes, starts, ends = list(), list(), list()
         for f in folders:
-            v = by_folder.get(f)
-            row[f] = '' if v is None else v['file'].split('/')[-1]
-            row[f'{f}_sec'] = '' if v is None else round(v['duration'], 1)
-            if v is not None:
-                s = datetime.datetime.fromisoformat(v['start'])
-                starts.append(s)
-                ends.append(s + datetime.timedelta(seconds=v['duration']))
+            vs = by_folder.get(f, [])
+            row[f] = '; '.join(name(v['file']) for v in vs)
+            row[f'{f}_sec'] = round(sum(v['duration'] for v in vs), 1) if vs else ''
+            if not vs:
+                continue
+            s0 = [datetime.datetime.fromisoformat(v['start']) for v in vs]
+            e0 = [s + datetime.timedelta(seconds=v['duration']) for s, v in zip(s0, vs)]
+            starts.append(min(s0))
+            ends.append(max(e0))
+            if len(vs) > 1:
+                gaps = [(s0[i + 1] - e0[i]).total_seconds() for i in range(len(vs) - 1)]
+                notes.append(f"{f}: {len(vs)} files" + (f", gaps {', '.join(f'{g:.0f}' for g in gaps)} s"
+                    if max(gaps) > 1.5 else ' (split while recording)'))
+            if (max(e0) - min(s0)).total_seconds() < (end - start).total_seconds() - 30:
+                notes.append(f"{f} stops after {(max(e0) - min(s0)).total_seconds() / 60:.1f} min")
         shared = (min(ends) - max(starts)).total_seconds() if len(starts) == len(folders) else 0.0
         row['shared_sec'] = round(max(shared, 0.0), 1)
         missing = [f for f in folders if f not in by_folder]
-        short = [f for f in folders if f in by_folder and by_folder[f]['duration'] < (end - start).total_seconds() - 30]
-        row['note'] = '; '.join((['missing: ' + ', '.join(missing)] if missing else [])
-            + ([f"{f} stops after {by_folder[f]['duration'] / 60:.1f} min" for f in short]))
+        row['note'] = '; '.join((['missing: ' + ', '.join(missing)] if missing else []) + notes)
         rows.append(row)
     for kind, files in (('gripper_calibration', spec.get('gripper_calibration', [])), ('head_mapping', spec.get('head_mapping', []))):
         for path in files:
-            row = {'type': kind, 'recording': '', 'start': '', 'end': '', 'shared_sec': '', 'note': f"{kind}/{path.split('/')[-1]}"}
+            row = {'type': kind, 'recording': '', 'start': '', 'end': '', 'shared_sec': '', 'note': f"{kind}/{name(path)}"}
             for f in folders:
-                row[f] = path.split('/')[-1] if path.split('/')[0] == f else ''
+                row[f] = name(path) if path.split('/')[0] == f else ''
                 row[f'{f}_sec'] = ''
             rows.append(row)
     return rows
@@ -226,8 +274,13 @@ def pairs_csv(rows: List[dict], folders: List[str]) -> str:
 
 
 def is_complete(group: List[dict], folders: List[str], min_sec: float) -> bool:
-    by = {v['folder']: v for v in group}
-    return all(f in by and by[f]['duration'] >= min_sec for f in folders)
+    """
+    Every camera folder recorded at least min_sec in the recording (several files of a camera summed).
+    """
+    total = collections.Counter()
+    for v in group:
+        total[v['folder']] += v['duration']
+    return all(total[f] >= min_sec for f in folders)
 
 
 def recording_length(group: List[dict]) -> float:
@@ -390,14 +443,20 @@ def span(group: List[dict]):
     return min(starts), max(ends)
 
 
-def place(src: pathlib.Path, dst_dir: pathlib.Path):
+def place(src: pathlib.Path, dst_dir: pathlib.Path, name: str):
+    """
+    Hard link (copy on another file system) of src as dst_dir/name; skipped if the same file
+    (same size) is already there, an error if another file is.
+    """
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir.joinpath(src.name)
-    if not dst.exists():
-        try:
-            os.link(src, dst)
-        except OSError:
-            shutil.copy2(src, dst)
+    dst = dst_dir.joinpath(name)
+    if dst.exists():
+        assert dst.stat().st_size == src.stat().st_size, f"{dst} exists with another size than {src}: not overwritten"
+        return dst
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
     return dst
 
 
@@ -474,12 +533,15 @@ def main(root, min_sec, save, propose, take_sec, tasks, output, aruco_config, fi
             output = output.rstrip('/')
             for name, s in spec.items():
                 raw = f"{output}/{name}/raw_videos"
-                jobs = [(f"{root}/{v['file']}", raw) for k in s.get('recordings', []) for v in groups[k]]
-                jobs += [(f"{root}/{f}", f"{raw}/gripper_calibration") for f in s.get('gripper_calibration', [])]
-                jobs += [(f"{root}/{f}", f"{raw}/head_mapping") for f in s.get('head_mapping', [])]
+                files = session_files(groups, s)
+                names = placed_names(files)
+                jobs = [(f"{root}/{f}", f"{raw}/{sub}".rstrip('/'), names[f]) for f, sub in files]
                 with concurrent.futures.ThreadPoolExecutor(8) as executor:
                     placed = list(executor.map(lambda j: s3_place(*j), jobs))
-                sheet = pairs_csv(pairs_rows(groups, s, folders), folders)
+                renamed = sorted(f for f in names if names[f] != f.split('/')[-1])
+                if renamed:
+                    print(f"{name}: same file name from two cameras, placed as " + ', '.join(names[f] for f in renamed))
+                sheet = pairs_csv(pairs_rows(groups, s, folders, names), folders)
                 b, key = split_s3(f"{raw}/pairs.csv")
                 with tempfile.NamedTemporaryFile('w', suffix='.csv') as f:
                     f.write(sheet)
@@ -490,14 +552,14 @@ def main(root, min_sec, save, propose, take_sec, tasks, output, aruco_config, fi
         output = pathlib.Path(os.path.expanduser(output)).absolute()
         for name, s in spec.items():
             raw = output.joinpath(name, 'raw_videos')
-            for k in s.get('recordings', []):
-                for v in groups[k]:
-                    place(root.joinpath(v['file']), raw)
-            for f in s.get('gripper_calibration', []):
-                place(root.joinpath(f), raw.joinpath('gripper_calibration'))
-            for f in s.get('head_mapping', []):
-                place(root.joinpath(f), raw.joinpath('head_mapping'))
-            raw.joinpath('pairs.csv').write_text(pairs_csv(pairs_rows(groups, s, folders), folders))
+            files = session_files(groups, s)
+            names = placed_names(files)
+            for f, sub in files:
+                place(root.joinpath(f), raw.joinpath(sub) if sub else raw, names[f])
+            renamed = sorted(f for f in names if names[f] != f.split('/')[-1])
+            if renamed:
+                print(f"{name}: same file name from two cameras, placed as " + ', '.join(names[f] for f in renamed))
+            raw.joinpath('pairs.csv').write_text(pairs_csv(pairs_rows(groups, s, folders, names), folders))
             n = sum(1 for _ in raw.rglob('*.MP4'))
             print(f"{name}: {n} videos and pairs.csv in {raw}")
 

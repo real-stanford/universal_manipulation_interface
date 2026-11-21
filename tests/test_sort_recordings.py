@@ -9,7 +9,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts_tag_tracking'))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sort_recordings import group_recordings, span, top_level_atoms, parse_mvhd, pairs_rows, pairs_csv, propose_tasks, tasks_yaml
+from sort_recordings import group_recordings, span, top_level_atoms, parse_mvhd, pairs_rows, pairs_csv, propose_tasks, tasks_yaml, \
+    session_files, placed_names, is_complete
 
 
 def v(folder, start, duration):
@@ -59,6 +60,36 @@ def test_pairs():
     text = pairs_csv(rows, ['head', 'left', 'right'])
     assert text.splitlines()[0] == 'type,recording,start,end,head,head_sec,left,left_sec,right,right_sec,shared_sec,note'
     assert len(text.splitlines()) == 6
+
+
+def test_split_and_same_names():
+    # station3 2026-11-20 recording 11: both wrists restarted (90 s + 511 s) inside one 614 s head video;
+    # and two cameras numbering a file GX010136
+    def f(folder, start, duration, name):
+        return {'file': f'{folder}/{name}', 'folder': folder, 'serial': folder, 'start': f'2026-11-20T{start}',
+            'duration': duration}
+    videos = [f('head', '15:07:56', 614, 'GX010172.MP4'), f('left', '15:07:58', 90, 'GX019315.MP4'),
+        f('left', '15:09:40', 511, 'GX019316.MP4'), f('right', '15:07:58', 90, 'GX010136.MP4'),
+        f('right', '15:09:41', 511, 'GX010146.MP4'),
+        f('left', '15:30:00', 15, 'GX010136.MP4'), f('right', '15:30:00', 15, 'GX019320.MP4'),
+        f('head', '15:30:00', 16, 'GX010180.MP4')]
+    groups = group_recordings(videos)
+    assert [len(g) for g in groups] == [5, 3]
+    spec = {'recordings': [0], 'gripper_calibration': ['left/GX010136.MP4', 'right/GX019320.MP4'],
+        'head_mapping': ['head/GX010180.MP4']}
+    files = session_files(groups, spec)
+    assert len(files) == 8   # every file of the take, two per wrist
+    names = placed_names(files)
+    # right/GX010136 (take, raw_videos/) and left/GX010136 (calibration, gripper_calibration/) do not meet
+    assert names['right/GX010136.MP4'] == 'GX010136.MP4' and names['left/GX010136.MP4'] == 'GX010136.MP4'
+    clash = placed_names([('right/GX010136.MP4', ''), ('left/GX010136.MP4', ''), ('head/GX010172.MP4', '')])
+    assert clash == {'right/GX010136.MP4': 'right_GX010136.MP4', 'left/GX010136.MP4': 'left_GX010136.MP4',
+        'head/GX010172.MP4': 'GX010172.MP4'}
+    rows = pairs_rows(groups, spec, ['head', 'left', 'right'], clash)
+    assert rows[0]['left'] == 'GX019315.MP4; GX019316.MP4' and rows[0]['left_sec'] == 601
+    assert rows[0]['right'] == 'right_GX010136.MP4; GX010146.MP4'
+    assert 'left: 2 files, gaps 12 s' in rows[0]['note'], rows[0]['note']
+    assert is_complete(groups[0], ['head', 'left', 'right'], 5.0)
 
 
 def test_propose():
@@ -117,6 +148,7 @@ def test_clip_role():
 
 if __name__ == '__main__':
     test_groups()
+    test_split_and_same_names()
     test_propose()
     test_clip_role()
     test_pairs()
