@@ -73,7 +73,49 @@ def test_station_job():
                 pass
 
 
+def test_batched_mcap():
+    import pickle
+    with tempfile.TemporaryDirectory() as tmp:
+        s = make_session(pathlib.Path(tmp))
+        pickle.dump([{}] * 23, s.joinpath('dataset_plan.pkl').open('wb'))
+        uploaded, exports = dict(), list()
+
+        def fake_run(cmd, log):
+            cmd = [str(c) for c in cmd]
+            if '07_export_mcap.py' in ' '.join(cmd):
+                batch = [int(k) for k in cmd[cmd.index('-e') + 1].split(',')]
+                exports.append(batch)
+                assert len(list(s.joinpath('dataset_mcap').glob('*.mcap'))) == 0, "earlier batch not deleted"
+                for k in batch:
+                    s.joinpath('dataset_mcap', f'episode_{k:06d}.mcap').write_bytes(b'm' * (k + 1))
+            elif cmd[:3] == ['aws', 's3', 'sync']:
+                for p in s.joinpath('dataset_mcap').glob('*.mcap'):
+                    uploaded[p.name] = p.stat().st_size
+            return 0, []
+        process_station.run = fake_run
+        process_station.s3_sizes = lambda url: dict(uploaded)
+        job = {'name': 'station1', 'sessions': tmp, 'config': 'c.yaml', 'on_s3': False, 'root': s.parent,
+            'names': ['task01'], 'upload': 's3://b/x'}
+        summary = process_station.process(job, False, True, True, None, start_from='mcap', batch_size=10)
+        assert exports == [list(range(10)), list(range(10, 20)), list(range(20, 23))], exports
+        name, status, failed, plan_yield, _ = summary[0]
+        assert status == 'ok', failed
+        assert len(uploaded) == 23 and '23 MCAP files' in plan_yield and 'cleanup: deleted 2 videos' in plan_yield, plan_yield
+        assert not list(s.rglob('*.mcap')) and not list(s.rglob('*.mp4'))
+        # an upload that does not arrive: the batch stays local, the session fails, videos kept
+        s2 = make_session(pathlib.Path(tmp, 'other'))
+        pickle.dump([{}] * 5, s2.joinpath('dataset_plan.pkl').open('wb'))
+        s = s2
+        uploaded.clear()
+        process_station.s3_sizes = lambda url: {}
+        job.update({'root': s2.parent})
+        summary = process_station.process(job, False, True, True, None, start_from='mcap', batch_size=10)
+        assert summary[0][1] == 'failed' and 'not on S3' in summary[0][2], summary
+        assert len(list(s2.rglob('*.mcap'))) == 5 and s2.joinpath('demos/demo_A/raw_video.mp4').is_file()
+
+
 if __name__ == '__main__':
+    test_batched_mcap()
     test_station_job()
     test_cleanup()
     print('all passed')

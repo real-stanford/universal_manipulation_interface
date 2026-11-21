@@ -5,10 +5,12 @@ Process all (or some) sessions of a station, one after the other: per session
 3. the dataset plan again with --keep_gaps (episodes with a short tracking gap kept,
    pose not available there), unless --no_keep_gaps;
 4. with --mcap: the episode MCAP files (07_export_mcap.py -c) to <session>/dataset_mcap/
-   (MCAP files of an earlier or failed export are deleted first; stops if the free disk is less
-   than 1.2 x the session's videos);
-5. with --upload: the MCAP files to <upload>/<session>/;
-6. with --cleanup (sessions on S3 and --upload): once every local MCAP file is on S3 with
+   (MCAP files of an earlier or failed export are deleted first); with --upload in batches of
+   --batch_size episodes: export, upload to <upload>/<session>/, check on S3 (name and size),
+   delete locally, so the disk holds the videos and one batch; without --upload all at once
+   (stops if the free disk is less than 1.2 x the session's videos);
+5. with --upload and --start_from upload: the MCAP files already in dataset_mcap/;
+6. with --cleanup (sessions on S3 and --upload): once every MCAP file is on S3 with
    the same size, the local videos (demos/*/raw_video.mp4 and raw_videos/: the originals stay
    in the S3 session) and the local MCAP files are deleted; logs, pairs.csv, tag tracking
    outputs and dataset_plan.pkl are kept. Not deleted if anything does not match.
@@ -44,6 +46,7 @@ sys.path.append(ROOT_DIR)
 
 # %%
 import json
+import pickle
 import pathlib
 import re
 import subprocess
@@ -63,16 +66,25 @@ def s3_sizes(url: str) -> dict:
     return {k[len(prefix):]: int(n) for k, n in (json.loads(out) or []) if '/' not in k[len(prefix):]}
 
 
-def cleanup(session: pathlib.Path, upload_url: str) -> str:
+def not_uploaded(paths: list, upload_url: str) -> list:
+    """
+    The local files not on S3 under upload_url with the same name and size.
+    """
+    remote = s3_sizes(upload_url)
+    return sorted(p.name for p in paths if remote.get(p.name) != p.stat().st_size)
+
+
+def cleanup(session: pathlib.Path, upload_url: str, mcaps_verified: bool = False) -> str:
     """
     Delete the local videos and MCAP files of a session whose MCAP files are all on S3
-    (same names and sizes). Returns what was done.
+    (same names and sizes; mcaps_verified: already checked and deleted batch by batch).
+    Returns what was done.
     """
-    local = {p.name: p.stat().st_size for p in session.joinpath('dataset_mcap').glob('*.mcap')}
-    remote = s3_sizes(upload_url)
-    mismatch = sorted(n for n, size in local.items() if remote.get(n) != size)
-    if not local or mismatch:
-        return f"cleanup skipped: MCAP files not all on {upload_url} with the same size: {mismatch or 'no local MCAP files'}"
+    local = list(session.joinpath('dataset_mcap').glob('*.mcap'))
+    if not mcaps_verified:
+        mismatch = not_uploaded(local, upload_url)
+        if not local or mismatch:
+            return f"cleanup skipped: MCAP files not all on {upload_url} with the same size: {mismatch or 'no local MCAP files'}"
     videos = [p for p in session.joinpath('demos').glob('*/raw_video.mp4') if p.is_file() and not p.is_symlink()]
     links = [p for p in session.joinpath('raw_videos').rglob('*') if p.suffix.lower() == '.mp4']
     mcaps = list(session.joinpath('dataset_mcap').glob('*.mcap'))
@@ -155,7 +167,8 @@ def free_gb(path: pathlib.Path) -> float:
     return shutil.disk_usage(path).free / 1e9
 
 
-def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_workers, start_from='download') -> list:
+def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_workers, start_from='download',
+        batch_size: int = 10) -> list:
     """
     Run one station's sessions; returns per session (name, status, failed step, yield, minutes).
     """
@@ -179,6 +192,7 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
             if not no_keep_gaps and STEPS.index(start_from) <= STEPS.index('plan'):
                 steps.append(('plan --keep_gaps', [py, 'scripts_tag_tracking/06_export_dataset_plan.py',
                     '-i', session, '-c', config, '--keep_gaps']))
+            batched = mcap and upload and STEPS.index(start_from) <= STEPS.index('mcap')
             if mcap and STEPS.index(start_from) <= STEPS.index('mcap'):
                 # MCAP files of an earlier or failed export are deleted (they are made again from the plan and
                 # the videos), so the folder (and the upload) holds only this export and the disk is free for it
@@ -187,18 +201,19 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
                     for p in previous:
                         p.unlink()
                     print(f"deleted {len(previous)} MCAP files of an earlier export", flush=True)
-                # the MCAP files hold the episodes' video: about as much free disk as the videos, kept 20% spare
+            if mcap and not batched and STEPS.index(start_from) <= STEPS.index('mcap'):
+                # all MCAP files at once (not uploaded): about as much free disk as the videos, kept 20% spare
                 videos_gb = sum(p.stat().st_size for p in session.joinpath('demos').glob('*/raw_video.mp4')) / 1e9
                 if free_gb(session) < 1.2 * videos_gb:
                     status, failed = 'failed', f"mcap: {free_gb(session):.1f} GB free, about {1.2 * videos_gb:.1f} GB " \
-                        f"needed (videos {videos_gb:.1f} GB); free disk, then --start_from mcap"
+                        f"needed (videos {videos_gb:.1f} GB); free disk, or upload (--upload exports in batches)"
                     print(failed, flush=True)
                     log.write(failed + '\n')
                     summary.append((f"{job['name']} {name}", status, failed, None, (time.time() - t0) / 60))
                     continue
                 steps.append(('mcap', [py, 'scripts_tag_tracking/07_export_mcap.py', '-i', session, '-c', config,
                     *(['-j', min(num_workers, 4)] if num_workers else ['-j', 4])]))
-            if upload and STEPS.index(start_from) <= STEPS.index('upload'):
+            if upload and not batched and STEPS.index(start_from) <= STEPS.index('upload'):
                 steps.append(('upload', ['aws', 's3', 'sync', session.joinpath('dataset_mcap'),
                     f"{upload.rstrip('/')}/{name}/", '--only-show-errors']))
             for step, cmd in steps:
@@ -213,11 +228,38 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
                     failed = f"{step}: {reason[-1].split('AssertionError: ')[-1]}" if reason else \
                         f"{step} (exit {code}), see {session.joinpath('logs', 'process_station.log')}"
                     break
+            n_uploaded = 0
+            if batched and status == 'ok':
+                # export, upload, check on S3 and delete batch_size episodes at a time: the disk holds the
+                # videos and one batch of MCAP files, not all of them
+                url = f"{upload.rstrip('/')}/{name}"
+                n_episodes = len(pickle.load(session.joinpath('dataset_plan.pkl').open('rb')))
+                for b0 in range(0, n_episodes, batch_size):
+                    batch = list(range(b0, min(b0 + batch_size, n_episodes)))
+                    print(f"MCAP episodes {batch[0]}-{batch[-1]} of {n_episodes}", flush=True)
+                    code, _ = run([py, 'scripts_tag_tracking/07_export_mcap.py', '-i', session, '-c', config,
+                        '-e', ','.join(str(k) for k in batch),
+                        *(['-j', min(num_workers, 4)] if num_workers else ['-j', 4])], log)
+                    if code == 0:
+                        code, _ = run(['aws', 's3', 'sync', session.joinpath('dataset_mcap'), url + '/',
+                            '--only-show-errors'], log)
+                    files = list(session.joinpath('dataset_mcap').glob('*.mcap'))
+                    missing = not_uploaded(files, url) if code == 0 else None
+                    if code != 0 or missing:
+                        status = 'failed'
+                        failed = f"mcap / upload of episodes {batch[0]}-{batch[-1]}" + \
+                            (f": not on S3 {missing}" if missing else f" (exit {code})") + \
+                            f", see {session.joinpath('logs', 'process_station.log')}"
+                        break
+                    for p in files:
+                        p.unlink()
+                    n_uploaded += len(files)
             if mcap and status == 'ok':
-                n = len(list(session.joinpath('dataset_mcap').glob('*.mcap')))
-                plan_yield = f"{plan_yield}; {n} MCAP files" if plan_yield else f"{n} MCAP files"
+                n = n_uploaded if batched else len(list(session.joinpath('dataset_mcap').glob('*.mcap')))
+                n = f"{n} MCAP files" + (' (uploaded and checked in batches, deleted locally)' if batched else '')
+                plan_yield = f"{plan_yield}; {n}" if plan_yield else n
             if cleanup_after and status == 'ok':
-                done = cleanup(session, f"{upload.rstrip('/')}/{name}")
+                done = cleanup(session, f"{upload.rstrip('/')}/{name}", mcaps_verified=batched)
                 print(done, flush=True)
                 log.write(done + '\n')
                 plan_yield = f"{plan_yield}\n  {done}"
@@ -240,8 +282,11 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
     help='After a verified upload: delete the local videos and MCAP files (sessions on S3 only)')
 @click.option('--start_from', type=click.Choice(STEPS), default='download',
     help='First step per session (resume after a failure; earlier steps\' outputs must exist)')
+@click.option('--batch_size', type=int, default=10,
+    help='With --mcap --upload: episodes exported, uploaded, checked and deleted locally per batch')
 @click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
-def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload, cleanup_after, start_from, num_workers):
+def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload, cleanup_after, start_from,
+        batch_size, num_workers):
     if jobs_yaml:
         assert sessions is None and config is None, "--jobs replaces SESSIONS / -c (give them per station in the yaml)"
         entries = yaml.safe_load(open(os.path.expanduser(jobs_yaml), 'r'))
@@ -257,7 +302,7 @@ def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload
 
     summary = list()
     for job in jobs:
-        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from)
+        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from, batch_size)
 
     print("\n============= summary =============")
     for name, status, failed, plan_yield, minutes in summary:
