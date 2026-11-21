@@ -367,6 +367,21 @@ Steps: `sort_videos imu wrist_tags gripper_range audio_sync head_tags segment_ep
 calibrate_bodies track_bodies fuse_head_imu trim_docking gripper_tcp sync_wrists fuse_grippers render export_plan`.
 Logs: `<session>/logs/`.
 
+All sessions of a station in one run (`scripts_tag_tracking/process_station.py`):
+
+```
+python scripts_tag_tracking/process_station.py <sessions> -c <config> [-w <local folder>] [--tasks task02,task03] [--mcap] [--upload s3://...]
+```
+
+Per session, in order: download (`<sessions>` on `s3://`: to `-w`, files already there skipped),
+the pipeline (all steps, no render), the dataset plan again with `--keep_gaps` (unless
+`--no_keep_gaps`), with `--mcap` the MCAP files (`<session>/dataset_mcap/`; files of an earlier
+export are moved to `dataset_mcap_<date>_<time>/`), with `--upload` the MCAP files to
+`<upload>/<session>/`. A failing session does not stop the others. At the end a summary per
+session: status, the failed step and its log, episodes and seconds used, MCAP files. Each
+session's output is also in `<session>/logs/process_station.log`. Without `--tasks`: every
+sub-folder with `raw_videos/`. The station's setup calibration must exist (step 2).
+
 After a TCP change, without re-tracking:
 
 ```
@@ -379,8 +394,14 @@ python scripts_tag_tracking/07_export_mcap.py -i <session> -j 4
 
 ```
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config>
+python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config> --random 10
 python scripts_tag_tracking/04_render_tracking.py -i <session> -c <config>
 ```
+
+`check_tcp_frame.py`: the head frame with each gripper's TCP (green), a line down to the table
+(yellow) and the cube axes, and each gripper's wrist camera frame at the same instant with its
+TCP; at the plan step with the lowest TCP. `--random 10` (`--seed`) or `-e 3,7`: one image per
+plan episode, at that episode's lowest TCP. Images: `<session>/tag_tracking/tcp_check_*.png`.
 
 Frame sync of the exported videos (see Frame sync check below):
 
