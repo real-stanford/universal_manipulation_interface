@@ -509,6 +509,7 @@ def main(root, min_sec, save, propose, take_sec, tasks, output, aruco_config, fi
             print(f"  {v['file']:<24} {v['serial']}  {v['start'][11:19]}  {v['duration']:7.1f} s  {v['size_mb']:8.0f} MB{flag}")
         previous_end = end
     if save:
+        pathlib.Path(os.path.expanduser(save)).parent.mkdir(parents=True, exist_ok=True)
         json.dump({'root': str(root), 'videos': videos, 'recordings': [[v['file'] for v in g] for g in groups]},
             open(os.path.expanduser(save), 'w'), indent=2)
         print(f"\nSaved {save}")
@@ -522,6 +523,7 @@ def main(root, min_sec, save, propose, take_sec, tasks, output, aruco_config, fi
             finger_size, cube_size, every_sec, jobs)
         proposed, comments, left_out = propose_tasks(groups, folders, min_sec, take_sec, roles)
         text = tasks_yaml(proposed, comments, left_out, groups, str(root), roles)
+        pathlib.Path(os.path.expanduser(propose)).parent.mkdir(parents=True, exist_ok=True)
         pathlib.Path(os.path.expanduser(propose)).write_text(text)
         print(f"\n{text}\nSaved {propose}")
 
