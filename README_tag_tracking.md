@@ -331,9 +331,9 @@ python scripts_tag_tracking/calibrate_setup.py -i <session> -c <config> -o examp
 ```
 
 `check_wrist_events.py` plots the episode detection to `<session>/tag_tracking/wrist_events/`;
-tune the `episodes` section if episodes are missed. A recording whose videos the audio sync
-rejects stops `segment_episodes` (`has no audio sync offset`): move its videos out of
-`raw_videos/` and its `demos/` folders out of the session, then rerun from `-sf audio_sync`.
+tune the `episodes` section if episodes are missed. A recording with a video the audio sync
+rejects (`failed` in `logs/04_audio_sync.log`) is left out whole, with a warning
+(`left out, a video of the recording has no audio sync offset`): its episodes cannot be synced.
 
 Check `setup_<station>/report.json`: `cube_to_wrist` spread of a few mm and most estimates
 inliers; for a station in a room mapped before, the tag map should agree with the earlier one
