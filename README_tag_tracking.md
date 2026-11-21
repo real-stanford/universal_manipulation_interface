@@ -106,8 +106,11 @@ Repeat 3-5 for each task, or all tasks of the station in one run (download, pipe
 summary with the yield per task at the end):
 
 ```
-python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/industrial_data --mcap --upload s3://my-bucket/mcaps/station3
+python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/industrial_data --mcap --upload s3://my-bucket/mcaps/station3 --cleanup
 ```
+
+With `--cleanup`, each task's local videos and MCAP files are deleted once its MCAP files are
+verified on S3, so only one task's data (about 30 GB) is on disk at a time.
 
 `--tasks task02,task03` for some of them; sessions already local: give the local folder
 instead of the s3:// one (no `-w`). Disk: about 25 GB per task.
@@ -370,7 +373,7 @@ Logs: `<session>/logs/`.
 All sessions of a station in one run (`scripts_tag_tracking/process_station.py`):
 
 ```
-python scripts_tag_tracking/process_station.py <sessions> -c <config> [-w <local folder>] [--tasks task02,task03] [--mcap] [--upload s3://...]
+python scripts_tag_tracking/process_station.py <sessions> -c <config> [-w <local folder>] [--tasks task02,task03] [--mcap] [--upload s3://...] [--cleanup]
 ```
 
 Per session, in order: download (`<sessions>` on `s3://`: to `-w`, files already there skipped),
@@ -381,6 +384,12 @@ export are moved to `dataset_mcap_<date>_<time>/`), with `--upload` the MCAP fil
 session: status, the failed step and its log, episodes and seconds used, MCAP files. Each
 session's output is also in `<session>/logs/process_station.log`. Without `--tasks`: every
 sub-folder with `raw_videos/`. The station's setup calibration must exist (step 2).
+
+`--cleanup` (limited disk; sessions on `s3://` and `--upload` only): after a session's upload,
+if every local MCAP file is on S3 with the same size, its local videos (`demos/*/raw_video.mp4`,
+`raw_videos/`) and MCAP files are deleted, about 30 GB per task. Kept: logs, `pairs.csv`,
+tag tracking outputs, `dataset_plan.pkl`. The videos stay in the S3 session; running the session
+again downloads them again. Nothing is deleted if a file is missing or differs on S3.
 
 After a TCP change, without re-tracking:
 

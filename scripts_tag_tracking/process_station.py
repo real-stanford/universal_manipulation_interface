@@ -6,7 +6,11 @@ Process all (or some) sessions of a station, one after the other: per session
    pose not available there), unless --no_keep_gaps;
 4. with --mcap: the episode MCAP files (07_export_mcap.py -c) to <session>/dataset_mcap/
    (MCAP files of an earlier export are moved to dataset_mcap_<date>_<time>/ first);
-5. with --upload: the MCAP files to <upload>/<session>/.
+5. with --upload: the MCAP files to <upload>/<session>/;
+6. with --cleanup (sessions on S3 and --upload): once every local MCAP file is on S3 with
+   the same size, the local videos (demos/*/raw_video.mp4 and raw_videos/: the originals stay
+   in the S3 session) and the local MCAP files are deleted; logs, pairs.csv, tag tracking
+   outputs and dataset_plan.pkl are kept. Not deleted if anything does not match.
 A session that fails does not stop the others. At the end, per session: status, the
 failed step and its log, and the yield (episodes, seconds used). The output of each
 session is also written to <session>/logs/process_station.log.
@@ -33,6 +37,38 @@ import re
 import subprocess
 import time
 import click
+
+
+def s3_sizes(url: str) -> dict:
+    """
+    File name -> size of the objects directly under an s3:// prefix.
+    """
+    bucket, _, prefix = url[len('s3://'):].partition('/')
+    prefix = prefix.rstrip('/') + '/'
+    out = subprocess.run(['aws', 's3api', 'list-objects-v2', '--bucket', bucket, '--prefix', prefix,
+        '--query', 'Contents[].[Key,Size]', '--output', 'json'], check=True, capture_output=True, text=True).stdout
+    return {k[len(prefix):]: int(n) for k, n in (json.loads(out) or []) if '/' not in k[len(prefix):]}
+
+
+def cleanup(session: pathlib.Path, upload_url: str) -> str:
+    """
+    Delete the local videos and MCAP files of a session whose MCAP files are all on S3
+    (same names and sizes). Returns what was done.
+    """
+    local = {p.name: p.stat().st_size for p in session.joinpath('dataset_mcap').glob('*.mcap')}
+    remote = s3_sizes(upload_url)
+    mismatch = sorted(n for n, size in local.items() if remote.get(n) != size)
+    if not local or mismatch:
+        return f"cleanup skipped: MCAP files not all on {upload_url} with the same size: {mismatch or 'no local MCAP files'}"
+    videos = [p for p in session.joinpath('demos').glob('*/raw_video.mp4') if p.is_file() and not p.is_symlink()]
+    links = [p for p in session.joinpath('raw_videos').rglob('*') if p.suffix.lower() == '.mp4']
+    mcaps = list(session.joinpath('dataset_mcap').glob('*.mcap'))
+    freed = sum(p.stat().st_size for p in videos + mcaps) + sum(p.stat().st_size for p in links
+        if p.is_file() and not p.is_symlink())
+    for p in videos + links + mcaps:
+        p.unlink()
+    return f"cleanup: deleted {len(videos)} videos, {len(links)} raw_videos entries, {len(mcaps)} MCAP files " \
+        f"({freed / 1e9:.1f} GB); videos stay in the S3 session, MCAP files on {upload_url}"
 
 
 def s3_sessions(url: str) -> list:
@@ -73,8 +109,10 @@ def run(cmd: list, log) -> tuple:
 @click.option('--no_keep_gaps', is_flag=True, default=False, help='Drop episodes with tracking gaps (no --keep_gaps plan)')
 @click.option('--mcap', is_flag=True, default=False, help='Export the episode MCAP files')
 @click.option('--upload', default=None, help='s3:// prefix: upload each session\'s MCAP files to <upload>/<session>/')
+@click.option('--cleanup', 'cleanup_after', is_flag=True, default=False,
+    help='After a verified upload: delete the local videos and MCAP files (sessions on S3 only)')
 @click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
-def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, num_workers):
+def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, cleanup_after, num_workers):
     config = os.path.abspath(os.path.expanduser(config))
     on_s3 = sessions.startswith('s3://')
     if on_s3:
@@ -92,6 +130,8 @@ def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, num_worke
         names = wanted
     assert names, f"no sessions (folders with raw_videos/) in {sessions}"
     assert upload is None or mcap, "--upload uploads the MCAP files: needs --mcap"
+    # the videos are deleted only where they can be downloaded again
+    assert not cleanup_after or (on_s3 and upload), "--cleanup needs sessions on s3:// and --upload"
     print(f"{len(names)} sessions: {', '.join(names)}", flush=True)
     workers = [] if num_workers is None else ['-j', num_workers]
     py = sys.executable
@@ -140,6 +180,11 @@ def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, num_worke
             if mcap and status == 'ok':
                 n = len(list(session.joinpath('dataset_mcap').glob('*.mcap')))
                 plan_yield = f"{plan_yield}; {n} MCAP files" if plan_yield else f"{n} MCAP files"
+            if cleanup_after and status == 'ok':
+                done = cleanup(session, f"{upload.rstrip('/')}/{name}")
+                print(done, flush=True)
+                log.write(done + '\n')
+                plan_yield = f"{plan_yield}\n  {done}"
         summary.append((name, status, failed, plan_yield, (time.time() - t0) / 60))
 
     print("\n============= summary =============")
