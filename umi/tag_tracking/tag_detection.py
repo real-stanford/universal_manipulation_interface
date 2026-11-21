@@ -114,9 +114,10 @@ def sample_detections(path: str, predefined: str, every_sec: float, max_sec: Opt
     cv2.setNumThreads(1)
     aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, predefined))
     detections = list()
-    # URLs (presigned S3): reconnect when the connection drops mid-read
-    options = {'reconnect': '1', 'reconnect_on_network_error': '1', 'reconnect_delay_max': '10'} \
-        if str(path).startswith('http') else None
+    # URLs (presigned S3): reconnect when the connection drops mid-read; a read that gets no data
+    # for 30 s fails (rw_timeout, microseconds) instead of waiting forever, the caller retries
+    options = {'reconnect': '1', 'reconnect_on_network_error': '1', 'reconnect_delay_max': '10',
+        'rw_timeout': '30000000'} if str(path).startswith('http') else None
     with av.open(str(path), options=options) as container:
         stream = container.streams.video[0]
         stream.thread_type = 'AUTO'
