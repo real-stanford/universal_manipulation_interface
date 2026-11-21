@@ -422,6 +422,14 @@ python scripts_tag_tracking/07_export_mcap.py -i <session> -j 4
 
 ### 4. Checks
 
+How many episodes and how long, over a folder of MCAP files (local or `s3://`, only the
+metadata at the end of each file is read): per task folder and in total, good episodes (a pose
+for every step of both grippers) and episodes kept with tracking gaps:
+
+```
+python scripts_tag_tracking/report_episodes.py <folder or s3://...> [--csv episodes.csv]
+```
+
 ```
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config>
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config> --random 10
