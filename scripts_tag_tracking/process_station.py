@@ -1,6 +1,8 @@
 """
 Process all (or some) sessions of a station, one after the other: per session
-1. download it if the sessions are on S3 (aws s3 sync, videos already there are skipped);
+1. download it if the sessions are on S3 (aws s3 sync, videos already there are skipped); skipped
+   if the free disk is less than what is left to download plus --spare_gb (processing outputs and
+   one MCAP batch), before anything is downloaded;
 2. run_tag_tracking_pipeline.py (all steps, no render);
 3. the dataset plan again with --keep_gaps (episodes with a short tracking gap kept,
    pose not available there), unless --no_keep_gaps;
@@ -64,6 +66,20 @@ def s3_sizes(url: str) -> dict:
     out = subprocess.run(['aws', 's3api', 'list-objects-v2', '--bucket', bucket, '--prefix', prefix,
         '--query', 'Contents[].[Key,Size]', '--output', 'json'], check=True, capture_output=True, text=True).stdout
     return {k[len(prefix):]: int(n) for k, n in (json.loads(out) or []) if '/' not in k[len(prefix):]}
+
+
+def s3_total_bytes(url: str) -> int:
+    """
+    Total size of all objects under an s3:// prefix (recursive).
+    """
+    bucket, _, prefix = url[len('s3://'):].partition('/')
+    out = subprocess.run(['aws', 's3api', 'list-objects-v2', '--bucket', bucket, '--prefix', prefix.rstrip('/') + '/',
+        '--query', 'sum(Contents[].Size)', '--output', 'json'], check=True, capture_output=True, text=True).stdout
+    return int(json.loads(out) or 0)
+
+
+def local_bytes(path: pathlib.Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob('*') if p.is_file() and not p.is_symlink()) if path.exists() else 0
 
 
 def not_uploaded(paths: list, upload_url: str) -> list:
@@ -168,7 +184,7 @@ def free_gb(path: pathlib.Path) -> float:
 
 
 def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_workers, start_from='download',
-        batch_size: int = 10) -> list:
+        batch_size: int = 10, spare_gb: float = 5.0) -> list:
     """
     Run one station's sessions; returns per session (name, status, failed step, yield, minutes).
     """
@@ -186,6 +202,17 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
             print(f"\n============= {job['name']} {name} =============", flush=True)
             steps = list()
             if job['on_s3'] and STEPS.index(start_from) <= STEPS.index('download'):
+                # the session must fit: what is not local yet, plus room for the processing outputs and one
+                # MCAP batch; otherwise skipped before downloading anything (no half-full disk)
+                missing_gb = max(0.0, s3_total_bytes(f"{sessions}/{name}") - local_bytes(session)) / 1e9
+                need_gb = missing_gb + spare_gb
+                if free_gb(session) < need_gb:
+                    status, failed = 'skipped', f"download: {free_gb(session):.1f} GB free, about {need_gb:.1f} GB " \
+                        f"needed ({missing_gb:.1f} GB to download + {spare_gb:.0f} GB for processing); enlarge the disk"
+                    print(failed, flush=True)
+                    log.write(failed + '\n')
+                    summary.append((f"{job['name']} {name}", status, failed, None, (time.time() - t0) / 60))
+                    continue
                 steps.append(('download', ['aws', 's3', 'sync', f"{sessions}/{name}", session, '--only-show-errors']))
             if STEPS.index(start_from) <= STEPS.index('pipeline'):
                 steps.append(('pipeline', [py, 'run_tag_tracking_pipeline.py', '-c', config, '-nr', *workers, session]))
@@ -282,11 +309,13 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
     help='After a verified upload: delete the local videos and MCAP files (sessions on S3 only)')
 @click.option('--start_from', type=click.Choice(STEPS), default='download',
     help='First step per session (resume after a failure; earlier steps\' outputs must exist)')
+@click.option('--spare_gb', type=float, default=5.0,
+    help='Free disk needed beyond a session\'s download (processing outputs, one MCAP batch)')
 @click.option('--batch_size', type=int, default=10,
     help='With --mcap --upload: episodes exported, uploaded, checked and deleted locally per batch')
 @click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
 def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload, cleanup_after, start_from,
-        batch_size, num_workers):
+        spare_gb, batch_size, num_workers):
     if jobs_yaml:
         assert sessions is None and config is None, "--jobs replaces SESSIONS / -c (give them per station in the yaml)"
         entries = yaml.safe_load(open(os.path.expanduser(jobs_yaml), 'r'))
@@ -302,7 +331,7 @@ def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload
 
     summary = list()
     for job in jobs:
-        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from, batch_size)
+        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from, batch_size, spare_gb)
 
     print("\n============= summary =============")
     for name, status, failed, plan_yield, minutes in summary:

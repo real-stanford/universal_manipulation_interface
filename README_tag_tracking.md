@@ -387,7 +387,11 @@ session's output is also in `<session>/logs/process_station.log`. Without `--tas
 sub-folder with `raw_videos/`. The station's setup calibration must exist (step 2).
 `--start_from pipeline|plan|mcap|upload` resumes a session after a failure (the outputs of the
 earlier steps must be there), e.g. `--tasks task05 --start_from mcap` after freeing disk.
-Disk: with `--upload`, the MCAP files are exported, uploaded, checked on S3 and deleted locally
+Disk: a session on S3 is downloaded only if the free disk holds it plus `--spare_gb` (5 GB:
+processing outputs, one MCAP batch); otherwise it is skipped before downloading (summary:
+`skipped`, enlarge the disk). Session sizes: 10-25 GB (station3 task01: 23.5 GB), so give the
+instance at least the largest session + 10 GB free.
+With `--upload`, the MCAP files are exported, uploaded, checked on S3 and deleted locally
 `--batch_size` (10) episodes at a time, so a session needs about its videos plus one batch
 (task of 10 min: about 12-15 GB). Without `--upload` all MCAP files stay: about 2 x the videos.
 

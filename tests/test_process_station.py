@@ -114,7 +114,21 @@ def test_batched_mcap():
         assert len(list(s2.rglob('*.mcap'))) == 5 and s2.joinpath('demos/demo_A/raw_video.mp4').is_file()
 
 
+def test_download_space_check():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp, 'sessions')
+        calls = list()
+        process_station.run = lambda cmd, log: calls.append(cmd) or (0, [])
+        process_station.s3_total_bytes = lambda url: 10 ** 15   # 1 PB: never fits
+        job = {'name': 'station3', 'sessions': 's3://b/station3/industrial_data', 'config': 'c.yaml', 'on_s3': True,
+            'root': root, 'names': ['task01', 'task02'], 'upload': 's3://b/up'}
+        summary = process_station.process(job, False, True, True, None)
+        assert [x[1] for x in summary] == ['skipped', 'skipped'] and 'enlarge the disk' in summary[0][2], summary
+        assert calls == [], "nothing may run (no download) when the session does not fit"
+
+
 if __name__ == '__main__':
+    test_download_space_check()
     test_batched_mcap()
     test_station_job()
     test_cleanup()
