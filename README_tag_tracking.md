@@ -385,6 +385,17 @@ session: status, the failed step and its log, episodes and seconds used, MCAP fi
 session's output is also in `<session>/logs/process_station.log`. Without `--tasks`: every
 sub-folder with `raw_videos/`. The station's setup calibration must exist (step 2).
 
+Several stations on one machine, one after the other, one command: list them in a job file
+(`example/tag_tracking/process_jobs.yaml`: per station `sessions`, `config`, `workdir`,
+optional `tasks`, `upload`) and pass the common options:
+
+```
+python scripts_tag_tracking/process_station.py --jobs example/tag_tracking/process_jobs.yaml --mcap --cleanup
+```
+
+All stations are checked before the first starts (configs exist, tasks found); one summary
+for all at the end.
+
 `--cleanup` (limited disk; sessions on `s3://` and `--upload` only): after a session's upload,
 if every local MCAP file is on S3 with the same size, its local videos (`demos/*/raw_video.mp4`,
 `raw_videos/`) and MCAP files are deleted, about 30 GB per task. Kept: logs, `pairs.csv`,

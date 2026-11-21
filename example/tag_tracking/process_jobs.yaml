@@ -1,0 +1,13 @@
+# Stations for scripts_tag_tracking/process_station.py --jobs, processed one after the other.
+# Per station: sessions (s3:// or local folder with the task folders), config, workdir (local
+# folder, for s3:// sessions), tasks (optional, default all), upload (s3:// prefix for the MCAP
+# files, <upload>/<task>/). Paths relative to the repository root or absolute.
+- sessions: s3://my-bucket/UMI_Collection/station1/industrial_data
+  config: example/tag_tracking/tag_tracking_station1.yaml
+  workdir: ~/umi_data/station1/industrial_data
+  tasks: [task03, task04, task05]
+  upload: s3://my-bucket/mcaps/station1
+- sessions: s3://my-bucket/UMI_Collection/station3/industrial_data
+  config: example/tag_tracking/tag_tracking_station3.yaml
+  workdir: ~/umi_data/station3/industrial_data
+  upload: s3://my-bucket/mcaps/station3

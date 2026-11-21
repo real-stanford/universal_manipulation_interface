@@ -22,6 +22,16 @@ config must have its setup calibration (README, step 2).
 python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data \\
     -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/industrial_data \\
     --tasks task02,task03,task04 --mcap --upload s3://my-bucket/mcaps/station3
+
+Several stations one after the other (--jobs, e.g. example/tag_tracking/process_jobs.yaml):
+    - sessions: s3://my-bucket/UMI_Collection/station1/industrial_data
+      config: example/tag_tracking/tag_tracking_station1.yaml
+      workdir: ~/umi_data/station1/industrial_data
+      tasks: [task03, task04, task05]      # optional, default all
+      upload: s3://my-bucket/mcaps/station1
+    - sessions: ...
+python scripts_tag_tracking/process_station.py --jobs jobs.yaml --mcap --cleanup
+All stations are checked (configs, sessions found) before the first starts; one summary at the end.
 """
 # %%
 import sys
@@ -37,6 +47,7 @@ import re
 import subprocess
 import time
 import click
+import yaml
 
 
 def s3_sizes(url: str) -> dict:
@@ -100,53 +111,56 @@ def run(cmd: list, log) -> tuple:
     return p.returncode, lines
 
 
-# %%
-@click.command()
-@click.argument('sessions')
-@click.option('-c', '--config', required=True, help="The station's tag tracking config")
-@click.option('-w', '--workdir', default=None, help='Local folder for the sessions (required for s3:// sessions)')
-@click.option('--tasks', default=None, help='Comma separated session names, default all')
-@click.option('--no_keep_gaps', is_flag=True, default=False, help='Drop episodes with tracking gaps (no --keep_gaps plan)')
-@click.option('--mcap', is_flag=True, default=False, help='Export the episode MCAP files')
-@click.option('--upload', default=None, help='s3:// prefix: upload each session\'s MCAP files to <upload>/<session>/')
-@click.option('--cleanup', 'cleanup_after', is_flag=True, default=False,
-    help='After a verified upload: delete the local videos and MCAP files (sessions on S3 only)')
-@click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
-def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, cleanup_after, num_workers):
+def station_job(sessions: str, config: str, workdir, tasks, mcap: bool, upload, cleanup_after: bool, name=None) -> dict:
+    """
+    One station's run, checked before anything starts: its sessions (all, or tasks), config,
+    local folder, upload prefix.
+    """
     config = os.path.abspath(os.path.expanduser(config))
+    assert os.path.isfile(config), f"config not found: {config}"
     on_s3 = sessions.startswith('s3://')
+    sessions = sessions.rstrip('/')
     if on_s3:
-        assert workdir, "-w <local folder> is needed for sessions on S3"
-        sessions = sessions.rstrip('/')
+        assert workdir, f"{sessions}: a local folder (-w / workdir) is needed for sessions on S3"
         names = s3_sessions(sessions)
         root = pathlib.Path(os.path.expanduser(workdir)).absolute()
     else:
         root = pathlib.Path(os.path.expanduser(sessions)).absolute()
         names = sorted(p.name for p in root.iterdir() if p.joinpath('raw_videos').is_dir())
     if tasks:
-        wanted = tasks.split(',')
+        wanted = tasks.split(',') if isinstance(tasks, str) else [str(t) for t in tasks]
         missing = [t for t in wanted if t not in names]
         assert not missing, f"not found in {sessions}: {missing} (sessions: {names})"
         names = wanted
     assert names, f"no sessions (folders with raw_videos/) in {sessions}"
-    assert upload is None or mcap, "--upload uploads the MCAP files: needs --mcap"
+    assert upload is None or mcap, "upload uploads the MCAP files: needs --mcap"
     # the videos are deleted only where they can be downloaded again
-    assert not cleanup_after or (on_s3 and upload), "--cleanup needs sessions on s3:// and --upload"
-    print(f"{len(names)} sessions: {', '.join(names)}", flush=True)
+    assert not cleanup_after or (on_s3 and upload), f"{sessions}: --cleanup needs sessions on s3:// and an upload"
+    if name is None:   # station name: the folder above the sessions folder, e.g. station3/industrial_data
+        parts = sessions.split('/')
+        name = parts[-2] if len(parts) > 1 and parts[-1] == 'industrial_data' else parts[-1]
+    return {'name': name, 'sessions': sessions, 'config': config, 'on_s3': on_s3, 'root': root, 'names': names,
+        'upload': upload}
+
+
+def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_workers) -> list:
+    """
+    Run one station's sessions; returns per session (name, status, failed step, yield, minutes).
+    """
+    sessions, config, upload = job['sessions'], job['config'], job['upload']
     workers = [] if num_workers is None else ['-j', num_workers]
     py = sys.executable
-
     summary = list()
-    for name in names:
-        session = root.joinpath(name)
+    for name in job['names']:
+        session = job['root'].joinpath(name)
         session.joinpath('logs').mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         status, failed, plan_yield = 'ok', None, None
         with session.joinpath('logs', 'process_station.log').open('a') as log:
             log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-            print(f"\n============= {name} =============", flush=True)
+            print(f"\n============= {job['name']} {name} =============", flush=True)
             steps = list()
-            if on_s3:
+            if job['on_s3']:
                 steps.append(('download', ['aws', 's3', 'sync', f"{sessions}/{name}", session, '--only-show-errors']))
             steps.append(('pipeline', [py, 'run_tag_tracking_pipeline.py', '-c', config, '-nr', *workers, session]))
             if not no_keep_gaps:
@@ -185,7 +199,41 @@ def main(sessions, config, workdir, tasks, no_keep_gaps, mcap, upload, cleanup_a
                 print(done, flush=True)
                 log.write(done + '\n')
                 plan_yield = f"{plan_yield}\n  {done}"
-        summary.append((name, status, failed, plan_yield, (time.time() - t0) / 60))
+        summary.append((f"{job['name']} {name}", status, failed, plan_yield, (time.time() - t0) / 60))
+    return summary
+
+
+# %%
+@click.command()
+@click.argument('sessions', required=False)
+@click.option('-c', '--config', default=None, help="The station's tag tracking config")
+@click.option('-w', '--workdir', default=None, help='Local folder for the sessions (required for s3:// sessions)')
+@click.option('--tasks', default=None, help='Comma separated session names, default all')
+@click.option('--jobs', 'jobs_yaml', default=None,
+    help='Several stations, one after the other: yaml list of {sessions, config, workdir, tasks, upload} (instead of SESSIONS)')
+@click.option('--no_keep_gaps', is_flag=True, default=False, help='Drop episodes with tracking gaps (no --keep_gaps plan)')
+@click.option('--mcap', is_flag=True, default=False, help='Export the episode MCAP files')
+@click.option('--upload', default=None, help='s3:// prefix: upload each session\'s MCAP files to <upload>/<session>/')
+@click.option('--cleanup', 'cleanup_after', is_flag=True, default=False,
+    help='After a verified upload: delete the local videos and MCAP files (sessions on S3 only)')
+@click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
+def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload, cleanup_after, num_workers):
+    if jobs_yaml:
+        assert sessions is None and config is None, "--jobs replaces SESSIONS / -c (give them per station in the yaml)"
+        entries = yaml.safe_load(open(os.path.expanduser(jobs_yaml), 'r'))
+        assert isinstance(entries, list) and entries, f"{jobs_yaml}: a list of stations expected"
+        # every station checked before the first starts
+        jobs = [station_job(e['sessions'], e['config'], e.get('workdir'), e.get('tasks'), mcap, e.get('upload'),
+            cleanup_after, e.get('name')) for e in entries]
+    else:
+        assert sessions and config, "SESSIONS and -c, or --jobs"
+        jobs = [station_job(sessions, config, workdir, tasks, mcap, upload, cleanup_after)]
+    for job in jobs:
+        print(f"{job['name']}: {len(job['names'])} sessions: {', '.join(job['names'])}", flush=True)
+
+    summary = list()
+    for job in jobs:
+        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers)
 
     print("\n============= summary =============")
     for name, status, failed, plan_yield, minutes in summary:

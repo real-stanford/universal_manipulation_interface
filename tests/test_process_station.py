@@ -51,6 +51,29 @@ def test_cleanup():
         assert 'skipped' in process_station.cleanup(s, 's3://b/x/task01')
 
 
+def test_station_job():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp, 'station3', 'industrial_data')
+        for t in ['task01', 'task02']:
+            root.joinpath(t, 'raw_videos').mkdir(parents=True)
+        root.joinpath('notes').mkdir()
+        config = pathlib.Path(tmp, 'config.yaml')
+        config.write_text('x: 1\n')
+        job = process_station.station_job(str(root), str(config), None, None, True, None, False)
+        assert job['name'] == 'station3' and job['names'] == ['task01', 'task02'] and not job['on_s3']
+        assert process_station.station_job(str(root), str(config), None, ['task02'], True, None, False)['names'] == ['task02']
+        for bad in [dict(tasks='task03'), dict(cleanup_after=True), dict(upload='s3://b/x', mcap=False)]:
+            args = dict(tasks=None, mcap=True, upload=None, cleanup_after=False)
+            args.update(bad)
+            try:
+                process_station.station_job(str(root), str(config), None, args['tasks'], args['mcap'], args['upload'],
+                    args['cleanup_after'])
+                raise RuntimeError(f"accepted {bad}")
+            except AssertionError:
+                pass
+
+
 if __name__ == '__main__':
+    test_station_job()
     test_cleanup()
     print('all passed')
