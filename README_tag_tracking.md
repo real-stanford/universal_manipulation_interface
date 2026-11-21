@@ -101,7 +101,18 @@ fill in `delivery:` and one entry per session name (`task02:` with `task_text`, 
 python scripts_tag_tracking/13_export_delivery.py -i ~/umi_data/station3/industrial_data/task02 -c example/tag_tracking/tag_tracking_station3.yaml -d ~/umi_data/station3/delivery.yaml -o ~/umi_data/station3/delivery --no_annotations -j 16
 ```
 
-Repeat 3-5 for each task. Upload the delivery folder:
+Repeat 3-5 for each task, or all tasks of the station in one run (download, pipeline,
+`--keep_gaps` plan, MCAP export, upload per task; a failing task does not stop the others; a
+summary with the yield per task at the end):
+
+```
+python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/industrial_data --mcap --upload s3://my-bucket/mcaps/station3
+```
+
+`--tasks task02,task03` for some of them; sessions already local: give the local folder
+instead of the s3:// one (no `-w`). Disk: about 25 GB per task.
+
+Upload the delivery folder:
 
 ```
 aws s3 sync ~/umi_data/station3/delivery s3://my-bucket/deliveries/station3_2026-11-20

@@ -18,8 +18,12 @@ frame (m, e.g. measured: Y below the lens centre, Z in front of the camera).
 Default both grippers in one image: the head frame with both TCPs on top, the
 grippers' wrist camera frames at the same time below (robot0, robot1).
 Writes <session>/tag_tracking/tcp_check_robots<k..>_<time>s.png
+-e 3,7 / --random N (--seed): per plan episode (given, or N random ones) the step of
+that episode with the lowest TCP, in the head video recording it; writes
+<session>/tag_tracking/tcp_check_ep<k>_robots<k..>_<time>s.png per episode.
 
 python scripts_tag_tracking/check_tcp_frame.py -i data_workspace/session -c umi_calib/tag_tracking.yaml --compare_tcp 0.075 0.192
+python scripts_tag_tracking/check_tcp_frame.py -i data_workspace/session -c umi_calib/tag_tracking.yaml --random 10
 """
 # %%
 import sys
@@ -94,7 +98,26 @@ def wrist_view(config, session, head, track_time, name, T_wrist_tcp, T_wrist_com
 @click.option('--head_video', default=None, help='Head video (demos/ directory name), default the longest')
 @click.option('--compare_tcp', type=float, nargs=2, default=None,
     help='Also draw a TCP at (0, Y, Z) in the wrist camera frame (m): Y Z')
-def main(input, config, robot, time_sec, compare_tcp, head_video):
+@click.option('-e', '--episodes', default=None, help='Plan episodes (comma separated): one image each')
+@click.option('--random', 'n_random', type=int, default=None, help='This many random plan episodes, one image each')
+@click.option('--seed', type=int, default=0, help='Random seed for --random')
+def main(input, config, robot, time_sec, compare_tcp, head_video, episodes, n_random, seed):
+    if episodes is None and n_random is None:
+        render(input, config, robot, time_sec, compare_tcp, head_video)
+        return
+    session = pathlib.Path(os.path.expanduser(input)).absolute()
+    plan = pickle.load(session.joinpath('dataset_plan.pkl').open('rb'))
+    if episodes is not None:
+        picked = [int(x) for x in episodes.split(',')]
+    else:
+        picked = sorted(np.random.default_rng(seed).choice(len(plan), min(n_random, len(plan)), replace=False).tolist())
+    print(f"plan episodes {picked} of {len(plan)}")
+    for k in picked:
+        print(f"--- episode {k}")
+        render(input, config, robot, None, compare_tcp, None, episode=k)
+
+
+def render(input, config, robot, time_sec, compare_tcp, head_video, episode=None):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     config = load_tag_tracking_config(config)
     camera = config['cameras'][config['head_camera']]
@@ -104,8 +127,18 @@ def main(input, config, robot, time_sec, compare_tcp, head_video):
     tcp_calibration = json.load(session.joinpath('tag_tracking', 'gripper_tcp.json').open('r'))
 
     heads = [x for x in get_session_videos(session) if x['camera_serial'] == config['head_camera']]
-    head = [x for x in heads if x['name'] == head_video][0] if head_video else \
-        max(heads, key=lambda x: x['end_timestamp'] - x['start_timestamp'])
+    if episode is not None:
+        # the episode's step with the lowest TCP (higher of the robots), in the head video recording it
+        e = pickle.load(session.joinpath('dataset_plan.pkl').open('rb'))[episode]
+        z, t = min((max(e['grippers'][r]['tcp_pose'][k, 2] for r in robots), e['episode_timestamps'][k])
+            for k in range(len(e['episode_timestamps']))
+            if not any(np.isnan(e['grippers'][r]['tcp_pose'][k, 2]) for r in robots))
+        head = [x for x in heads if x['start_timestamp'] <= t <= x['end_timestamp']][0]
+        time_sec = float(t - head['start_timestamp'])
+        print(f"episode {episode}: lowest TCP z {z * 100:.1f} cm at head video {time_sec:.2f}s")
+    else:
+        head = [x for x in heads if x['name'] == head_video][0] if head_video else \
+            max(heads, key=lambda x: x['end_timestamp'] - x['start_timestamp'])
     print(f"head video {head['name']}")
     track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
     if time_sec is None and not session.joinpath('dataset_plan.pkl').is_file():
@@ -183,7 +216,7 @@ def main(input, config, robot, time_sec, compare_tcp, head_video):
     for k, x in enumerate(tiles):
         bottom[:x.shape[0], k * tile_w:k * tile_w + x.shape[1]] = x
     combined = np.concatenate([img, bottom], axis=0)
-    tag = 'robots' + ''.join(str(r) for r in robots)
+    tag = ('' if episode is None else f'ep{episode}_') + 'robots' + ''.join(str(r) for r in robots)
     output = session.joinpath('tag_tracking', f"tcp_check_{tag}_{track['time'][i]:.1f}s.png")
     cv2.imwrite(str(output), combined)
     print(f"saved {output}")
