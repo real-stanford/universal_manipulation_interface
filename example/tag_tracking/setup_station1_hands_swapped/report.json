@@ -1,0 +1,122 @@
+{
+  "source_session": "tool_handling",
+  "head_mapping_videos": [
+    "head_mapping_C3501326502664_2026.11.18_10.25.32.578417"
+  ],
+  "head_task_video": "demo_C3501326502664_2026.11.18_10.42.56.421217",
+  "n_frames": {
+    "environment": 2187,
+    "right_cube": 4363,
+    "left_cube": 3204
+  },
+  "missing_tags": {
+    "environment": [],
+    "right_cube": [],
+    "left_cube": []
+  },
+  "variance_factor": {
+    "environment": 14.127985137047402,
+    "right_cube": 1.5176606428682344,
+    "left_cube": 4.658586242905822
+  },
+  "shape_sources": {
+    "left_cube": {
+      "source": "setup_20261116/bodies.json:right_cube",
+      "estimated_here_minus_source_mm": {
+        "2": 0.0,
+        "3": 93.77919876530844,
+        "4": 0.4005213465990935,
+        "5": 0.20768556027905832
+      }
+    }
+  },
+  "line_delay_us": 5.424063116370808,
+  "readout_ms": 11.0,
+  "wrist_clocks": "audio sync",
+  "T_wrist_tcp": {
+    "right_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.192
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "left_cube": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.075
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.182
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "cube_to_wrist": {
+    "right_cube": {
+      "n_candidates": 91421,
+      "n_sampled": 600,
+      "n_wrist_invalid": 563,
+      "n_head_invalid": 4,
+      "n_too_fast": 3,
+      "n_estimates": 30,
+      "n_inliers": 30,
+      "spread_mm": 3.8379047393245487,
+      "spread_deg": 0.7351947695337323,
+      "std_error_mm": 0.8381048330352615,
+      "std_error_deg": 0.16381169787107375,
+      "median_cube_speed": 0.05443436346534926,
+      "distance_cube_to_wrist_mm": 86.03978702492547
+    },
+    "left_cube": {
+      "n_candidates": 91664,
+      "n_sampled": 600,
+      "n_wrist_invalid": 584,
+      "n_head_invalid": 2,
+      "n_too_fast": 4,
+      "n_estimates": 10,
+      "n_inliers": 9,
+      "spread_mm": 1.8713004573753982,
+      "spread_deg": 0.4027737351467783,
+      "std_error_mm": 1.562985322982616,
+      "std_error_deg": 0.1662373932071641,
+      "median_cube_speed": 0.1409859756558176,
+      "distance_cube_to_wrist_mm": 85.16427706862247
+    }
+  }
+}
