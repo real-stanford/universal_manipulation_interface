@@ -191,11 +191,13 @@ def session_files(groups: List[List[dict]], spec: dict) -> List[Tuple[str, str]]
     """
     (file relative to the day folder, sub folder of raw_videos/) of a session (tasks.yaml entry):
     every file of its recordings (a camera can have several in one recording), then the gripper
-    calibration and head mapping files.
+    calibration and head mapping files; without the files listed under exclude (e.g. a camera's
+    file copied into another camera's folder).
     """
-    out = [(v['file'], '') for k in spec.get('recordings', []) for v in groups[k]]
-    out += [(f, 'gripper_calibration') for f in spec.get('gripper_calibration', [])]
-    out += [(f, 'head_mapping') for f in spec.get('head_mapping', [])]
+    exclude = set(spec.get('exclude', []))
+    out = [(v['file'], '') for k in spec.get('recordings', []) for v in groups[k] if v['file'] not in exclude]
+    out += [(f, 'gripper_calibration') for f in spec.get('gripper_calibration', []) if f not in exclude]
+    out += [(f, 'head_mapping') for f in spec.get('head_mapping', []) if f not in exclude]
     return out
 
 
@@ -222,9 +224,10 @@ def pairs_rows(groups: List[List[dict]], spec: dict, folders: List[str],
     head mapping files.
     """
     name = lambda f: (names or {}).get(f, f.split('/')[-1])
+    exclude = set(spec.get('exclude', []))
     rows = list()
     for k in spec.get('recordings', []):
-        group = groups[k]
+        group = [v for v in groups[k] if v['file'] not in exclude]
         start, end = span(group)
         by_folder = dict()
         for v in sorted(group, key=lambda v: v['start']):

@@ -90,6 +90,10 @@ def test_split_and_same_names():
     assert rows[0]['right'] == 'right_GX010136.MP4; GX010146.MP4'
     assert 'left: 2 files, gaps 12 s' in rows[0]['note'], rows[0]['note']
     assert is_complete(groups[0], ['head', 'left', 'right'], 5.0)
+    # a wrist file copied into the head folder by mistake: excluded from the files and the sheet
+    spec_x = dict(spec, exclude=['left/GX019315.MP4'])
+    assert 'left/GX019315.MP4' not in [f for f, _ in session_files(groups, spec_x)]
+    assert pairs_rows(groups, spec_x, ['head', 'left', 'right'])[0]['left'] == 'GX019316.MP4'
 
 
 def test_propose():
