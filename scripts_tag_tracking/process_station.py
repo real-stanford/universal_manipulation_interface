@@ -320,6 +320,10 @@ def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload
         assert sessions is None and config is None, "--jobs replaces SESSIONS / -c (give them per station in the yaml)"
         entries = yaml.safe_load(open(os.path.expanduser(jobs_yaml), 'r'))
         assert isinstance(entries, list) and entries, f"{jobs_yaml}: a list of stations expected"
+        for k, e in enumerate(entries):
+            missing = [key for key in ('sessions', 'config') if not e.get(key)]
+            assert not missing, f"{jobs_yaml}, station {k + 1} ({e.get('sessions')}): {', '.join(missing)} not set " \
+                "(a station needs its tag tracking config with setup_calibration, README step 2)"
         # every station checked before the first starts
         jobs = [station_job(e['sessions'], e['config'], e.get('workdir'), e.get('tasks'), mcap, e.get('upload'),
             cleanup_after, e.get('name')) for e in entries]
