@@ -1,6 +1,6 @@
-# station1 with the two grippers in swapped hands (2026-11-21): tag_tracking_station1.yaml with robot_index
-# swapped; body names stay (right_cube / left_cube = the physical cubes, as in the setup calibration).
-# setup_station1_hands_swapped/ = setup_station1/ with robot_index swapped in gripper_tcp.json.
+# station1 on 2026-11-21 only: the two grippers in swapped hands. Same as tag_tracking_station1.yaml (all other
+# days, unchanged) with robot_index swapped; body names stay (right_cube / left_cube = the physical cubes, as in
+# the setup calibration). setup_station1_20261121/ = setup_station1/ with robot_index swapped in gripper_tcp.json.
 # Tag tracking config for station1 (2026-11-18), see umi/tag_tracking/config.py.
 # New environment (head_mapping); yesterday's right gripper (cube 2-5, camera C3501326029433)
 # now in the left hand; a new right gripper (cube 8-11, fingers 6 / 7, camera C3501326500348).
@@ -13,7 +13,7 @@ head_camera: C3501326502664
 # setup calibration from the station1 tool_handling session (calibrate_setup.py), the left
 # cube's shape from setup_20261116 (same cube; its tag 3 faces away from the head here):
 # --body_shape left_cube=setup_20261116/bodies.json:right_cube
-setup_calibration: setup_station1_hands_swapped
+setup_calibration: setup_station1_20261121
 head_imu:
   cam_imu_calibration: openicc/head/cam_imu/cam_imu_calib_result_GX010298.json
   noise_setting: head_gopro12_wide_fisheye_setting_720.yaml
