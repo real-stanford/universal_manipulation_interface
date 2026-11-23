@@ -1,115 +1,122 @@
 """
-scripts_tag_tracking/14_export_rhoda.py on generated H.265 videos (one keyframe per second, the frame
-number drawn into every frame): the copied clip starts at the keyframe before the episode, has every
-frame to the end, is tagged hvc1, decodes, and the frame at the sync index is the episode's first
-frame; the mosaic has one frame per output frame from the sync frames on.
+scripts_tag_tracking/14_export_rhoda.py on a generated episode MCAP laid out as 07_export_mcap.py
+writes it: three cameras (frame numbers drawn into the images), each starting at its keyframe before
+the episode, gripper width every step, a gap in the right gripper's poses.
+Checks: three hvc1 mp4s with every frame, the frame at each file's sync frame index is the episode's
+first frame, frames.csv rows (frame indices, widths, pose_valid, empty TCP in the gap), meta.json,
+and the mosaic (H.264, n frames, starting at the sync frames).
 
 python tests/test_rhoda_export.py
 """
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts_tag_tracking'))
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tests'))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import base64
+import csv
 import importlib
 import json
+import pathlib
 import subprocess
 import tempfile
 import av
+import cv2
+from mcap.writer import Writer
 from test_mcap_exact_start import make_video, read_number, FPS
 
 rhoda = importlib.import_module('14_export_rhoda')
+export = importlib.import_module('07_export_mcap')
+N = 50
 
 
 def probe(path):
     out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames', '-show_entries',
-        'stream=codec_name,codec_tag_string,nb_read_frames,width,height,pix_fmt', '-of', 'json', path],
+        'stream=codec_name,codec_tag_string,nb_read_frames,width,height,pix_fmt', '-of', 'json', str(path)],
         check=True, capture_output=True, text=True).stdout
     return json.loads(out)['streams'][0]
 
 
-def test_copy_clip():
+def make_mcap(tmp):
+    """
+    Episode of N steps at 30 fps from t = 10 s. Camera c: video frames from its keyframe before the
+    episode start frame start[c]; frame index i of the source video shows the number i.
+    """
+    src = os.path.join(tmp, 'src.mp4')
+    make_video(src)
+    starts = {0: 45, 1: 44, 2: 47}           # camera0 right wrist, camera1 left wrist, camera2 head
+    path = os.path.join(tmp, 'episode_000012.mcap')
+    dt = 1 / FPS
+    ns = lambda t: int(round(t * 1e9))
+    with open(path, 'wb') as f:
+        w = Writer(f)
+        w.start()
+        s = w.register_schema('x', 'jsonschema', b'{}')
+        for c, start in starts.items():
+            ch = w.register_channel(f'/cameras/camera{c}/video', 'json', s)
+            for index, data in export.video_messages(src, start, start + N):
+                t = 10 + (index - start) * dt       # step 0 at t = 10 for every camera
+                w.add_message(ch, log_time=ns(t), publish_time=ns(t), data=json.dumps(
+                    {'data': base64.b64encode(data).decode(), 'format': 'h265'}).encode())
+        for g in range(2):
+            width = w.register_channel(f'robot{g}/gripper/state', 'json', s)
+            pose = w.register_channel(f'robot{g}/eef/pose', 'json', s)
+            for i in range(N):
+                t = ns(10 + i * dt)
+                w.add_message(width, log_time=t, publish_time=t, data=json.dumps({'width': 0.05 - 0.03 * g}).encode())
+                if not (g == 0 and 10 <= i < 12):     # right gripper: no pose in steps 10, 11
+                    w.add_message(pose, log_time=t, publish_time=t, data=json.dumps(
+                        {'pos': [0.1 + g, 0.2, 0.3], 'quat_xyzw': [0, 0, 0, 1]}).encode())
+        w.add_metadata('recording', {'episode_length': str(N), 'video_fps': str(FPS), 'camera0': 'robot0_wrist',
+            'camera1': 'robot1_wrist', 'camera2': 'head', 'world_frame': 'tag32', 'video_start': 'keyframe'})
+        w.add_metadata('sync', {'method': 'audio + motion', 'camera0_offset_ms': '-3.2', 'camera0_sync_sigma_ms': '0.4'})
+        w.add_metadata('camera2', {'role': 'head', 'model': 'GoPro HERO12 Black', 'fx': '1200.0'})
+        w.finish()
+    return path, starts
+
+
+def test_export_mcap():
     with tempfile.TemporaryDirectory() as tmp:
-        src = os.path.join(tmp, 'src.mp4')
-        make_video(src)
-        for start, stop in [(45, 100), (30, 70), (0, 40)]:
-            first = rhoda.first_keyframe(src, start)
-            assert first == (start // FPS) * FPS, (start, first)
-            out = os.path.join(tmp, f'clip_{start}.mp4')
-            n = rhoda.copy_clip(src, first, stop, out)
-            assert n == stop - first
-            p = probe(out)
-            assert p['codec_name'] == 'hevc' and p['codec_tag_string'] == 'hvc1' and int(p['nb_read_frames']) == n, p
-            with av.open(out) as c:
+        path, starts = make_mcap(tmp)
+        out = pathlib.Path(tmp, 'out')
+        rec = rhoda.recording_name('station3/2026-11-21/task01', path)
+        assert rec == 'station3_2026-11-21_task01_episode_000012'
+        r = rhoda.export_mcap(path, rec, out)
+        expected = {'right': 15, 'left': 14, 'head': 17}   # start - keyframe before it (keyframes every 30)
+        assert r['sync_index'] == expected, r['sync_index']
+        folder = out.joinpath(rec)
+        assert sorted(os.listdir(folder)) == sorted(f"{rec}_{x}" for x in
+            ['frames.csv', 'head.mp4', 'left.mp4', 'meta.json', 'right.mp4'])
+        for role, cam in [('right', 0), ('left', 1), ('head', 2)]:
+            p = probe(folder.joinpath(f"{rec}_{role}.mp4"))
+            assert p['codec_tag_string'] == 'hvc1' and int(p['nb_read_frames']) == expected[role] + N, (role, p)
+            with av.open(str(folder.joinpath(f"{rec}_{role}.mp4"))) as c:
                 frames = [f.to_ndarray(format='gray') for f in c.decode(video=0)]
-            assert len(frames) == n
-            assert read_number(frames[0]) == first and read_number(frames[start - first]) == start
-            assert read_number(frames[-1]) == stop - 1
-
-
-def test_mosaic():
-    with tempfile.TemporaryDirectory() as tmp:
-        src = os.path.join(tmp, 'src.mp4')
-        make_video(src)
-        clips = list()
-        for start, stop in [(45, 100), (40, 95), (50, 105)]:   # three cameras, different sync indices
-            first = rhoda.first_keyframe(src, start)
-            out = os.path.join(tmp, f'c{start}.mp4')
-            rhoda.copy_clip(src, first, stop, out)
-            clips.append((out, start - first))
-        path = os.path.join(tmp, 'mosaic.mp4')
-        rhoda.mosaic(clips[0], clips[1], clips[2], 55, path, fps=FPS, width=320)
-        p = probe(path)
-        assert p['codec_name'] == 'h264' and p['pix_fmt'] == 'yuv420p' and int(p['nb_read_frames']) == 55, p
-        assert (int(p['width']), int(p['height'])) == (320, 240 + 120), p
-        with av.open(path) as c:
-            first = next(c.decode(video=0)).to_ndarray(format='gray')
-        # head (top) shows its sync frame (45)
-        import cv2
-        head = cv2.resize(first[:240, :320], (320, 240))
-        assert read_number(head) == 45
-
-
-def test_export_episode():
-    import csv
-    import numpy as np
-    with tempfile.TemporaryDirectory() as tmp:
-        demos = os.path.join(tmp, 'demos')
-        for name in ['right', 'left', 'head']:
-            os.makedirs(os.path.join(demos, name))
-            make_video(os.path.join(demos, name, 'raw_video.mp4'))
-        n = 50
-        pose = np.tile([0.1, 0.2, 0.3, 0.0, 0.0, 0.1], (n, 1))
-        pose[10:12] = np.nan                                       # a gap in the right gripper
-        episode = {'episode_timestamps': 100 + np.arange(n) / FPS,
-            'grippers': [{'tcp_pose': pose, 'gripper_width': np.full(n, 0.05), 'pose_valid': ~np.isnan(pose[:, 0])},
-                         {'tcp_pose': np.tile([0.4, 0.2, 0.3, 0.0, 0.0, 0.0], (n, 1)), 'gripper_width': np.full(n, 0.02),
-                          'pose_valid': np.ones(n, bool)}],
-            'cameras': [{'video_path': 'right/raw_video.mp4', 'video_start_end': (45, 45 + n), 'clock_correction_ms': -3.2},
-                        {'video_path': 'left/raw_video.mp4', 'video_start_end': (44, 44 + n), 'clock_correction_ms': 1.5},
-                        {'video_path': 'head/raw_video.mp4', 'video_start_end': (47, 47 + n)}]}
-        out = os.path.join(tmp, 'out')
-        import pathlib
-        r = rhoda.export_episode(3, episode, pathlib.Path(demos), pathlib.Path(out), 'st_task', {'session': 'x'}, None, {0: 0.4})
-        assert r['sync_index'] == {'right': 15, 'left': 14, 'head': 17}, r['sync_index']
-        folder = os.path.join(out, 'st_task_ep0003')
-        assert sorted(os.listdir(folder)) == ['st_task_ep0003_frames.csv', 'st_task_ep0003_head.mp4',
-            'st_task_ep0003_left.mp4', 'st_task_ep0003_meta.json', 'st_task_ep0003_right.mp4']
-        rows = list(csv.DictReader(open(os.path.join(folder, 'st_task_ep0003_frames.csv'))))
-        assert len(rows) == n and rows[0]['head_frame'] == '17' and rows[0]['right_frame'] == '15' and rows[5]['left_frame'] == '19'
+            assert read_number(frames[expected[role]]) == starts[cam], role      # the sync frame
+            assert read_number(frames[expected[role] + 7]) == starts[cam] + 7, role
+        rows = list(csv.DictReader(open(folder.joinpath(f"{rec}_frames.csv"))))
+        assert len(rows) == N
+        assert (rows[0]['head_frame'], rows[0]['left_frame'], rows[0]['right_frame']) == ('17', '14', '15')
+        assert rows[5]['right_frame'] == '20' and rows[5]['time_s'].startswith('0.1666')
         assert rows[10]['right_pose_valid'] == '0' and rows[10]['right_tcp_x'] == '' and rows[10]['right_gripper_width_m'] == '0.05000'
-        assert rows[0]['right_pose_valid'] == '1' and rows[0]['left_tcp_x'] == '0.40000'
-        meta = json.load(open(os.path.join(folder, 'st_task_ep0003_meta.json')))
+        assert rows[10]['left_pose_valid'] == '1' and rows[10]['left_tcp_x'] == '1.10000' and rows[0]['left_gripper_width_m'] == '0.02000'
+        meta = json.load(open(folder.joinpath(f"{rec}_meta.json")))
         assert meta['sync']['sync_frame_index'] == {'head': 17, 'left': 14, 'right': 15}
-        assert meta['sync']['clock_correction_ms'] == {'right': -3.2, 'left': 1.5} and meta['sync']['sync_sigma_ms'] == {'right': 0.4}
-        # the frame at each file's sync index is the camera's episode start frame
-        with av.open(os.path.join(folder, 'st_task_ep0003_head.mp4')) as c:
-            frames = [f.to_ndarray(format='gray') for f in c.decode(video=0)]
-        assert read_number(frames[17]) == 47 and len(frames) == 17 + n
+        assert meta['sync']['clock_correction_ms'] == {'right': -3.2} and meta['sync']['sync_sigma_ms'] == {'right': 0.4}
+        assert meta['cameras']['head']['model'] == 'GoPro HERO12 Black' and meta['n_frames'] == N
+
+        mosaic = folder.joinpath(f"{rec}_mosaic.mp4")
+        rhoda.mosaic(*((folder.joinpath(r['files'][k]), r['sync_index'][k]) for k in ('head', 'right', 'left')),
+            N, mosaic, fps=FPS, width=320, source_fps=FPS)
+        p = probe(mosaic)
+        assert p['codec_name'] == 'h264' and p['pix_fmt'] == 'yuv420p' and int(p['nb_read_frames']) == N, p
+        with av.open(str(mosaic)) as c:
+            first = next(c.decode(video=0)).to_ndarray(format='gray')
+        assert read_number(cv2.resize(first[:240, :320], (320, 240))) == starts[2]          # head at its sync frame
+        assert read_number(cv2.resize(first[240:, :160], (320, 240))) == starts[0]          # right wrist
+        assert read_number(cv2.resize(first[240:, 160:], (320, 240))) == starts[1]          # left wrist
 
 
 if __name__ == '__main__':
-    test_export_episode()
-    test_copy_clip()
-    test_mosaic()
+    test_export_mcap()
     print('all passed')

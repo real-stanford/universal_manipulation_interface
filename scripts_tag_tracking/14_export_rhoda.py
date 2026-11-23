@@ -1,29 +1,38 @@
 """
-Export the episodes of a processed session (dataset_plan.pkl) as one folder per recording with
-three video files, per-frame data and metadata, as the data PRD's UMI delivery asks for:
+Rhoda delivery from episode MCAP files (07_export_mcap.py): one folder per recording (episode) with
+the three camera videos, per-frame data and metadata, in the order of the data PRD's UMI delivery:
 
-  <out>/<name>_ep<k>/
-    <name>_ep<k>_head.mp4, _left.mp4, _right.mp4
-        the cameras' original H.265 video, not re-encoded: copied from the keyframe at or before
-        the episode's first step (GoPro: one keyframe per second) to its last step; tagged hvc1
-        (QuickTime / Safari need it), moov first (faststart)
-    <name>_ep<k>_frames.csv
-        one row per episode step (= one frame of each camera): the frame index of that step in each
-        of the three files, time from the first step, per gripper its width (m, 0 = fully closed),
-        pose_valid and TCP pose (world frame, m + quaternion xyzw; empty where pose_valid is false)
-    <name>_ep<k>_meta.json
-        per camera: model, lens, field of view, resolution, frame rate, Kannala-Brandt intrinsics and
-        their source; sync: method, the sync event (the episode's first step) and its frame index in
-        each file, wrist clock corrections and their uncertainty; gripper width and TCP conventions
-    <name>_ep<k>_mosaic.mp4 (optional, --mosaic / --mosaic_episodes)
-        review video: head on top, right and left wrist below, all three from the sync frame on;
-        H.264 (yuv420p, faststart, any player), --mosaic_fps (30), head 1280x960; the only part that
-        decodes and encodes video. Not a substitute for the three files.
+  <out>/<rec>/
+    <rec>_head.mp4, <rec>_left.mp4, <rec>_right.mp4
+        the camera videos of the MCAP (/cameras/camera{j}/video, the GoPro's own H.265, already
+        synchronized), not re-encoded: the same frames, moved into an mp4 (ffmpeg stream copy, the
+        parameter sets in the file header, tagged hvc1 for QuickTime / Safari, faststart). Each file
+        starts where the MCAP video starts: at the keyframe before the episode (up to 1 s).
+    <rec>_meta.json
+        per camera: model, lens, field of view, resolution, frame rate, intrinsics (the MCAP's
+        camera{j} metadata, 07 with -c); sync: method, the sync event (the episode's first step) and
+        its frame index in each file, clock corrections and uncertainty (MCAP sync metadata);
+        gripper width and TCP conventions
+    <rec>_frames.csv
+        one row per episode step: the frame index of that step in each file, time from the first
+        step, per gripper its width (m, 0 = fully closed), pose_valid and TCP pose (world frame, m,
+        quaternion xyzw; empty where pose_valid is 0)
+    <rec>_mosaic.mp4 (optional, --mosaic N per task folder or --mosaic_files)
+        review video: head on top, right and left wrist below, each from its sync frame on, so
+        the three views start at the same instant; H.264 yuv420p 30 fps, any player. The only part
+        that decodes and encodes video.
 
-The sync event is the episode's first step: the same instant in all three files (each camera's frame
-nearest to it, within half a frame); frame f of a file belongs to step f - sync_frame_index.
+Sync: the sync event is the episode's first step (the first robot0/gripper/state message). The sync
+frame index of a file is the number of frames of that camera before it; frame f of a file belongs
+to step f - sync_frame_index, all three within half a frame of the same instant (the MCAP's
+synchronized message times).
 
-python scripts_tag_tracking/14_export_rhoda.py -i <session> -c <config> -o <out> --name station3_2026-11-21_task01 [--mosaic 3]
+Input: an MCAP file, a folder or s3:// prefix with MCAP files below it, or a paths CSV of
+describe_mcaps.py --list_only. S3 files are downloaded one at a time into the output folder and
+deleted after. Recording name: task folder + file name (station3/2026-11-21/task01/episode_000012.mcap
+-> station3_2026-11-21_task01_episode_000012).
+
+python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <out> [--mosaic 3]
 """
 # %%
 import sys
@@ -31,267 +40,235 @@ import os
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-os.chdir(ROOT_DIR)
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # %%
-import concurrent.futures
+import base64
+import collections
 import csv
 import json
 import pathlib
-import pickle
 import subprocess
+from fractions import Fraction
 import click
-import av
 import numpy as np
-from scipy.spatial.transform import Rotation
-from umi.common.exiftool_util import ExifTool
-from umi.tag_tracking.config import load_tag_tracking_config
-from umi.tag_tracking.camera_metadata import camera_record
+from mcap.reader import make_reader
 
 ROBOT_SIDES = ('right', 'left')   # UMI: robot0 right, robot1 left
-SYNC_METHOD = 'audio cross-correlation of all cameras, wrist clocks refined per episode from wrist IMU against head-tracked motion'
 
 
-def first_keyframe(video_path: str, start_frame: int) -> int:
+def read_mcap(path: str) -> dict:
     """
-    Index of the keyframe at or before start_frame.
+    Everything the delivery needs from one episode MCAP: metadata records, per camera topic its
+    (time ns, Annex B data) messages, per robot gripper width and pose messages by time.
     """
-    with av.open(video_path) as container:
-        stream = container.streams.video[0]
-        fps = float(stream.average_rate)
-        t0 = float((stream.start_time or 0) * stream.time_base)
-        container.seek(int(max(0.0, start_frame / fps - 0.001) / stream.time_base), stream=stream,
-            backward=True, any_frame=False)
-        best = None
-        for packet in container.demux(stream):
-            if packet.pts is None:
-                continue
-            index = int(round((float(packet.pts * stream.time_base) - t0) * fps))
-            if index > start_frame:
-                break
-            if packet.is_keyframe:
-                best = index
-        assert best is not None, f"{video_path}: no keyframe at or before frame {start_frame}"
-        return best
+    out = {'metadata': {}, 'video': collections.defaultdict(list), 'width': collections.defaultdict(dict),
+        'pose': collections.defaultdict(dict)}
+    with open(path, 'rb') as f:
+        reader = make_reader(f)
+        out['metadata'] = {m.name: dict(m.metadata) for m in reader.iter_metadata()}
+        for _, channel, message in reader.iter_messages():
+            topic = channel.topic
+            if topic.startswith('/cameras/') and topic.endswith('/video'):
+                out['video'][topic.split('/')[2]].append(
+                    (message.log_time, base64.b64decode(json.loads(message.data)['data'])))
+            elif topic.endswith('/gripper/state'):
+                out['width'][int(topic.split('/')[0][5:])][message.log_time] = json.loads(message.data)['width']
+            elif topic.endswith('/eef/pose'):
+                m = json.loads(message.data)
+                out['pose'][int(topic.split('/')[0][5:])][message.log_time] = m['pos'] + m['quat_xyzw']
+    return out
 
 
-def copy_clip(video_path: str, first_frame: int, stop_frame: int, out_path: str) -> int:
+def write_video(frames: list, fps: float, out_path: str, keep_parameter_sets: bool):
     """
-    Frames [first_frame, stop_frame) of the video stream into an mp4, packets copied (no decoding),
-    first_frame must be a keyframe; tag hvc1, faststart. Returns the number of frames written.
+    H.265 Annex B frames (MCAP video messages) into an mp4 by ffmpeg stream copy, constant fps.
+    The parameter sets go into the file header (hvc1) unless keep_parameter_sets (video spliced
+    from two encodings, --exact_start MCAPs: they stay in the stream, tag hev1).
     """
-    with av.open(video_path) as src, av.open(out_path, 'w', format='mp4', options={'movflags': '+faststart'}) as dst:
-        stream = src.streams.video[0]
-        fps = float(stream.average_rate)
-        t0 = float((stream.start_time or 0) * stream.time_base)
-        out = dst.add_stream(template=stream)
-        out.codec_tag = 'hvc1'
-        src.seek(int(max(0.0, first_frame / fps - 0.001) / stream.time_base), stream=stream,
-            backward=True, any_frame=False)
-        offset, n = None, 0
-        for packet in src.demux(stream):
-            if packet.pts is None or packet.size == 0:
-                continue
-            index = int(round((float(packet.pts * stream.time_base) - t0) * fps))
-            if index < first_frame:
-                continue
-            if index >= stop_frame:
-                break
-            if offset is None:
-                assert packet.is_keyframe and index == first_frame, f"{video_path}: frame {index} is not the keyframe {first_frame}"
-                offset = packet.pts
-            packet.pts -= offset
-            packet.dts = packet.pts if packet.dts is None else packet.dts - offset
-            packet.stream = out
-            dst.mux(packet)
-            n += 1
-    return n
+    rate = Fraction(fps).limit_denominator(1001)
+    bsf = [] if keep_parameter_sets else ['-bsf:v', 'filter_units=remove_types=32|33|34']
+    tag = 'hev1' if keep_parameter_sets else 'hvc1'
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'hevc', '-framerate', f"{rate.numerator}/{rate.denominator}",
+        '-i', 'pipe:0', '-c', 'copy', *bsf, '-tag:v', tag, '-movflags', '+faststart', str(out_path)],
+        input=b''.join(data for _, data in frames), check=True, capture_output=True)
 
 
 def mosaic(head: tuple, right: tuple, left: tuple, n_frames: int, out_path: str, fps: float,
-        encoder: str = 'libx264', width: int = 1280):
+        encoder: str = 'libx264', width: int = 1280, source_fps: float = None):
     """
     Review mosaic (ffmpeg): head on top (width x 3/4 width), right and left wrist below (half width
-    each), each input from its sync frame on (file, sync_frame_index), n_frames frames of the source
-    rate, written at fps, H.264 yuv420p faststart.
+    each), each input from its sync frame on ((file, sync_frame_index)), n_frames source frames,
+    written at fps, H.264 yuv420p faststart. Each input's frames are timed by their number from the
+    sync frame (frame k at k / source_fps), so the three views are stacked frame by frame, not by
+    their file timestamps (which differ by rounding).
     """
+    source_fps = source_fps or fps
     w2 = width // 2
     h1, h2 = width * 3 // 4, w2 * 3 // 4
     inputs = list()
     for path, _ in (head, right, left):
         inputs += ['-i', str(path)]
-    trims = [f"[{k}:v]trim=start_frame={sync}:end_frame={sync + n_frames},setpts=PTS-STARTPTS,"
+    rate = Fraction(source_fps).limit_denominator(1001)
+    trims = [f"[{k}:v]trim=start_frame={sync}:end_frame={sync + n_frames},setpts=N*{rate.denominator}/({rate.numerator}*TB),"
         f"scale={size},setsar=1[v{k}]" for k, ((_, sync), size) in
         enumerate(zip((head, right, left), (f'{width}:{h1}', f'{w2}:{h2}', f'{w2}:{h2}')))]
     graph = ';'.join(trims) + f";[v1][v2]hstack=inputs=2[bottom];[v0][bottom]vstack=inputs=2,fps={fps},format=yuv420p[out]"
     codec = ['-c:v', encoder] + (['-preset', 'veryfast', '-crf', '23'] if encoder == 'libx264' else ['-preset', 'p4', '-cq', '23'])
+    n_out = int(round(n_frames * fps / source_fps))   # the fps filter repeats the last frame past the end
     subprocess.run(['ffmpeg', '-v', 'error', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', *codec,
-        '-movflags', '+faststart', '-an', str(out_path)], check=True)
+        '-frames:v', str(n_out), '-movflags', '+faststart', '-an', str(out_path)], check=True)
 
 
-def export_episode(k: int, episode: dict, demos_dir: pathlib.Path, out_dir: pathlib.Path, name: str,
-        meta_base: dict, camera_records: list, sync_sigmas: dict) -> dict:
+def export_mcap(path: str, rec: str, out_dir: pathlib.Path) -> dict:
     """
-    One recording folder: three mp4s, frames.csv, meta.json. Returns the files and sync indices.
+    One recording folder from one episode MCAP. Returns the files, sync frame indices and frame count.
     """
-    rec = f"{name}_ep{k:04d}"
+    data = read_mcap(path)
+    recording = data['metadata'].get('recording', {})
+    fps = float(recording.get('video_fps', 0)) or None
+    roles = {k: v for k, v in recording.items() if k.startswith('camera')}   # camera0 -> robot0_wrist, ...
+    role_of = lambda cam: {'robot0_wrist': 'right', 'robot1_wrist': 'left', 'head': 'head'}.get(roles.get(cam), cam)
+    steps = sorted(data['width'][0])
+    assert steps, f"{path}: no robot0/gripper/state messages"
+    assert data['video'], f"{path}: no camera video"
+    dt_ns = 1e9 / fps if fps else float(np.median(np.diff(steps)))
     folder = out_dir.joinpath(rec)
     folder.mkdir(parents=True, exist_ok=True)
-    cameras = episode['cameras']
-    grippers = episode['grippers']
-    n_steps = len(episode['episode_timestamps'])
-    roles = [ROBOT_SIDES[c] if c < len(grippers) else 'head' for c in range(len(cameras))]
-    files, sync_index = dict(), dict()
-    for c, (camera, role) in enumerate(zip(cameras, roles)):
-        start, stop = (int(x) for x in camera['video_start_end'])
-        assert stop - start == n_steps, f"episode {k} camera {role}: {stop - start} frames for {n_steps} steps"
-        video = str(demos_dir.joinpath(camera['video_path']))
-        first = first_keyframe(video, start)
-        path = folder.joinpath(f"{rec}_{role}.mp4")
-        n = copy_clip(video, first, stop, str(path))
-        assert n == stop - first, f"{path}: {n} frames written, {stop - first} expected"
-        files[role], sync_index[role] = path.name, start - first
+    exact = recording.get('video_start') == 'exact'
 
-    times = np.asarray(episode['episode_timestamps'], dtype=np.float64)
+    files, sync_index, frame_times = dict(), dict(), dict()
+    for cam, frames in sorted(data['video'].items()):
+        role = role_of(cam)
+        frames.sort(key=lambda x: x[0])
+        times = np.array([t for t, _ in frames], dtype=np.int64)
+        gaps = np.diff(times)
+        assert len(gaps) == 0 or np.all(np.abs(gaps - dt_ns) < 0.25 * dt_ns), \
+            f"{path} {cam}: frames not evenly spaced (dropped frames?)"
+        # sync frame: this camera's frame nearest to the first step
+        sync_index[role] = int(np.argmin(np.abs(times - steps[0])))
+        frame_times[role] = times
+        out = folder.joinpath(f"{rec}_{role}.mp4")
+        write_video(frames, fps or 1e9 / dt_ns, str(out), keep_parameter_sets=exact)
+        files[role] = out.name
+
+    roles_order = [r for r in ('head', 'left', 'right') if r in files]
     with folder.joinpath(f"{rec}_frames.csv").open('w', newline='') as f:
         w = csv.writer(f)
-        header = ['step', 'time_s'] + [f'{role}_frame' for role in ('head', 'left', 'right') if role in files]
-        for g in range(len(grippers)):
-            side = ROBOT_SIDES[g]
+        robots = sorted(data['width'])
+        header = ['step', 'time_s'] + [f'{r}_frame' for r in roles_order]
+        for g in robots:
+            side = ROBOT_SIDES[g] if g < len(ROBOT_SIDES) else f'robot{g}'
             header += [f'{side}_gripper_width_m', f'{side}_pose_valid'] + \
                 [f'{side}_tcp_{a}' for a in ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw')]
         w.writerow(header)
-        quats = [Rotation.from_rotvec(np.nan_to_num(np.asarray(g['tcp_pose'])[:, 3:])).as_quat() for g in grippers]
-        for i in range(n_steps):
-            row = [i, f"{times[i] - times[0]:.6f}"] + [sync_index[role] + i for role in ('head', 'left', 'right') if role in files]
-            for g, gripper in enumerate(grippers):
-                pose = np.asarray(gripper['tcp_pose'])[i]
-                valid = bool(np.asarray(gripper.get('pose_valid', ~np.isnan(np.asarray(gripper['tcp_pose'])[:, 0])))[i]) \
-                    and not np.isnan(pose).any()
-                width = float(np.asarray(gripper['gripper_width']).reshape(-1)[i])
-                row += [f"{width:.5f}" if np.isfinite(width) else '', int(valid)]
-                row += ([f"{v:.5f}" for v in pose[:3]] + [f"{v:.6f}" for v in quats[g][i]]) if valid else [''] * 7
+        for i, t in enumerate(steps):
+            row = [i, f"{(t - steps[0]) / 1e9:.6f}"]
+            for r in roles_order:   # the frame of this step in each file (nearest frame time)
+                row.append(int(np.argmin(np.abs(frame_times[r] - t))))
+            for g in robots:
+                width = data['width'][g].get(t)
+                pose = data['pose'][g].get(t)
+                row += [f"{width:.5f}" if width is not None else '', int(pose is not None)]
+                row += ([f"{v:.5f}" for v in pose[:3]] + [f"{v:.6f}" for v in pose[3:]]) if pose is not None else [''] * 7
             w.writerow(row)
 
+    cameras = {role_of(k): v for k, v in data['metadata'].items() if k.startswith('camera') and k[6:].isdigit()}
+    sync = data['metadata'].get('sync', {})
     meta = {
-        **meta_base,
         'recording': rec,
-        'episode_index': k,
-        'n_frames': n_steps,
-        'duration_s': round(float(times[-1] - times[0]) + float(np.median(np.diff(times))) if n_steps > 1 else 0.0, 3),
-        'files': {role: files[role] for role in ('head', 'left', 'right') if role in files},
-        'cameras': {role: rec_ for role, rec_ in zip(roles, camera_records)} if camera_records else None,
+        'source_mcap': os.path.basename(path),
+        'n_frames': len(steps),
+        'duration_s': round((steps[-1] - steps[0]) / 1e9 + dt_ns / 1e9, 3),
+        'frame_rate_hz': fps,
+        'files': {r: files[r] for r in roles_order},
+        'cameras': cameras or None,
         'sync': {
-            'method': SYNC_METHOD,
+            'method': sync.get('method'),
             'event': "the episode's first step: the same instant in all three files (each camera's frame nearest "
                      "to it, within half a frame); frame f of a file belongs to step f - sync_frame_index",
-            'sync_frame_index': {role: sync_index[role] for role in ('head', 'left', 'right') if role in sync_index},
-            'clock_correction_ms': {role: round(float(cam['clock_correction_ms']), 3) for cam, role in zip(cameras, roles)
-                if cam.get('clock_correction_ms') is not None},
-            'sync_sigma_ms': {roles[c]: s for c, s in sync_sigmas.items()},
+            'sync_frame_index': {r: sync_index[r] for r in roles_order},
+            'clock_correction_ms': {role_of(k.split('_')[0]): float(v) for k, v in sync.items() if k.endswith('_offset_ms')},
+            'sync_sigma_ms': {role_of(k.split('_')[0]): float(v) for k, v in sync.items() if k.endswith('_sync_sigma_ms')},
         },
+        'gripper': {'width_unit': 'm', 'width_zero': 'fully closed',
+            'width_source': 'finger tag distance measured in the wrist camera, every frame',
+            'right': 'robot0', 'left': 'robot1'},
+        'tcp': {'frame': recording.get('world_frame', 'world'), 'position_unit': 'm', 'orientation': 'quaternion xyzw',
+            **{k: v for k, v in recording.items() if 'tcp_in_camera' in k}},
         'frames_csv': f"{rec}_frames.csv",
     }
     folder.joinpath(f"{rec}_meta.json").write_text(json.dumps(meta, indent=2))
-    return {'recording': rec, 'folder': folder, 'files': files, 'sync_index': sync_index, 'n_frames': n_steps}
+    return {'recording': rec, 'folder': folder, 'files': files, 'sync_index': sync_index, 'n_frames': len(steps),
+        'fps': fps}
+
+
+def recording_name(task: str, path: str) -> str:
+    stem = os.path.basename(path).rsplit('.', 1)[0]
+    parts = [p for p in (task or '').split('/') if p and p not in ('.', 'dataset_mcap')]
+    return '_'.join(parts + [stem])
 
 
 # %%
 @click.command()
-@click.option('-i', '--input', required=True, help='Session directory with dataset_plan.pkl')
-@click.option('-c', '--config', required=True, help='Tag tracking config (camera intrinsics, gripper config)')
+@click.argument('source')
 @click.option('-o', '--output', required=True, help='Output directory, one folder per recording')
-@click.option('--name', default=None, help='Recording name prefix, e.g. station3_2026-11-21_task01 (default: session folder)')
-@click.option('-e', '--episodes', default=None, help='Comma separated plan episodes, default all')
-@click.option('--mosaic', 'n_mosaic', type=int, default=0, help='Also a mosaic for this many episodes, evenly over the session')
-@click.option('--mosaic_episodes', default=None, help='Comma separated plan episodes with a mosaic (instead of --mosaic)')
+@click.option('--mosaic', 'n_mosaic', type=int, default=0, help='Also a mosaic for this many recordings per task folder')
+@click.option('--mosaic_files', default=None, help='Comma separated MCAP file names that get a mosaic (instead of --mosaic)')
 @click.option('--mosaic_fps', type=float, default=30.0)
 @click.option('--mosaic_encoder', default='libx264', type=click.Choice(['libx264', 'h264_nvenc']))
-@click.option('-j', '--jobs', type=int, default=4, help='Recordings written in parallel (copying, disk bound)')
-def main(input, config, output, name, episodes, n_mosaic, mosaic_episodes, mosaic_fps, mosaic_encoder, jobs):
-    session = pathlib.Path(os.path.expanduser(input)).absolute()
+@click.option('--overwrite', is_flag=True, default=False, help='Redo recordings whose folder has a meta.json')
+def main(source, output, n_mosaic, mosaic_files, mosaic_fps, mosaic_encoder, overwrite):
+    from report_episodes import list_mcaps
+    from describe_mcaps import read_paths_csv
     out_dir = pathlib.Path(os.path.expanduser(output)).absolute()
-    name = name or session.name
-    plan = pickle.load(session.joinpath('dataset_plan.pkl').open('rb'))
-    indices = list(range(len(plan))) if episodes is None else [int(x) for x in episodes.split(',')]
-    assert all(0 <= k < len(plan) for k in indices), f"plan has {len(plan)} episodes"
-    demos_dir = session.joinpath('demos')
-    config = load_tag_tracking_config(config)
-
-    bodies = json.load(session.joinpath('tag_tracking', 'bodies.json').open('r'))['bodies']
-    world_tag = [b['anchor_tag'] for b in bodies.values() if b['static']][0]
-    tcp = {x['robot_index']: x for x in json.load(session.joinpath('tag_tracking', 'gripper_tcp.json').open('r')).values()}
-    meta_base = {
-        'session': session.name,
-        'world_frame': f"environment tag {world_tag} (anchor of the static tag map), z up from the table",
-        'gripper': {
-            'width_unit': 'm', 'width_zero': 'fully closed',
-            'width_source': 'finger tag distance measured in the wrist camera every frame, '
-                            'mapped to the gripper range of its calibration clip',
-            'right': 'robot0', 'left': 'robot1',
-        },
-        'tcp': {
-            'frame': 'world', 'position_unit': 'm', 'orientation': 'quaternion xyzw',
-            'in_wrist_camera_m': {ROBOT_SIDES[r]: [round(float(v), 5) for v in np.array(t['T_wrist_tcp'])[:3, 3]]
-                for r, t in tcp.items()},
-        },
-    }
-
-    # per camera metadata (cameras are the same for all episodes of a session)
-    first_cameras = plan[indices[0]]['cameras']
-    with ExifTool() as et:
-        exif = {c['video_path']: list(et.get_metadata(str(demos_dir.joinpath(c['video_path']))))[0] for c in first_cameras}
-    with av.open(str(demos_dir.joinpath(first_cameras[0]['video_path']))) as container:
-        fps = float(container.streams.video[0].average_rate)
-    n_grippers = len(plan[indices[0]]['grippers'])
-    camera_records = list()
-    for c, camera in enumerate(first_cameras):
-        info = exif[camera['video_path']]
-        serial = info['QuickTime:CameraSerialNumber']
-        role = f"{ROBOT_SIDES[c]}_wrist" if c < n_grippers else 'head'
-        rec = camera_record(role, serial, info, fps, config['cameras'][serial])
-        rec['intrinsics_source'] = 'OpenICC calibration of this camera: ' + os.path.basename(config['cameras'][serial].intrinsics_json)
-        camera_records.append(rec)
-
-    sync_path = session.joinpath('tag_tracking', 'wrist_sync.json')
-    sync = json.load(sync_path.open('r')) if sync_path.is_file() else {'videos': {}}
-
-    def sigmas(episode):
-        head = pathlib.Path(episode['cameras'][-1]['video_path']).parent.name
-        fits = sync['videos'].get(head, dict())
-        out = dict()
-        for c, camera in enumerate(episode['cameras'][:n_grippers]):
-            line = (fits.get(pathlib.Path(camera['video_path']).parent.name) or dict()).get('line')
-            if line is not None:
-                out[c] = round(float(line['residual_ms']), 2)
-        return out
-
-    print(f"{len(plan)} episodes in the plan, exporting {len(indices)} to {out_dir}", flush=True)
-    results = dict()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max(1, min(jobs, len(indices)))) as pool:
-        futures = {pool.submit(export_episode, k, plan[k], demos_dir, out_dir, name, meta_base, camera_records,
-            sigmas(plan[k])): k for k in indices}
-        for future in concurrent.futures.as_completed(futures):
-            r = future.result()
-            results[futures[future]] = r
-            print(f"{r['recording']}: {r['n_frames']} frames, sync frame index "
-                + ', '.join(f"{role} {i}" for role, i in r['sync_index'].items()), flush=True)
-
-    if mosaic_episodes:
-        chosen = [int(x) for x in mosaic_episodes.split(',')]
-    elif n_mosaic > 0:
-        chosen = sorted({indices[int(round(i))] for i in np.linspace(0, len(indices) - 1, min(n_mosaic, len(indices)))})
+    if source.endswith('.csv'):
+        files = read_paths_csv(source)
+    elif source.endswith('.mcap') and not source.startswith('s3://'):
+        files = [(os.path.abspath(os.path.expanduser(source)), os.path.getsize(os.path.expanduser(source)), '.')]
     else:
-        chosen = list()
-    for k in chosen:
-        if k not in results:
-            print(f"episode {k}: no mosaic, not exported in this run")
+        files = list_mcaps(source)
+    assert files, f"no MCAP files in {source}"
+    by_task = collections.defaultdict(list)
+    for path, size, task in files:
+        by_task[task or '.'].append(path)
+    chosen = set()
+    if mosaic_files:
+        chosen = set(mosaic_files.split(','))
+    elif n_mosaic > 0:
+        for task, paths in by_task.items():
+            paths = sorted(paths)
+            chosen |= {os.path.basename(paths[int(round(i))]) for i in np.linspace(0, len(paths) - 1, min(n_mosaic, len(paths)))}
+    print(f"{len(files)} MCAP files in {len(by_task)} task folders -> {out_dir}", flush=True)
+
+    done, failed = 0, 0
+    for n, (path, size, task) in enumerate(sorted(files, key=lambda f: (f[2], f[0])), 1):
+        rec = recording_name(task, path)
+        if not overwrite and out_dir.joinpath(rec, f"{rec}_meta.json").is_file():
             continue
-        r = results[k]
-        path = r['folder'].joinpath(f"{r['recording']}_mosaic.mp4")
-        mosaic(*((r['folder'].joinpath(r['files'][role]), r['sync_index'][role]) for role in ('head', 'right', 'left')),
-            r['n_frames'], path, mosaic_fps, mosaic_encoder)
-        print(f"{path.name}: mosaic", flush=True)
+        local = path
+        try:
+            if path.startswith('s3://'):
+                local = str(out_dir.joinpath(f".{rec}.mcap"))
+                out_dir.mkdir(parents=True, exist_ok=True)
+                subprocess.run(['aws', 's3', 'cp', path, local, '--only-show-errors'], check=True)
+            r = export_mcap(local, rec, out_dir)
+            msg = f"{n}/{len(files)} {rec}: {r['n_frames']} frames, sync frame index " + \
+                ', '.join(f"{k} {v}" for k, v in sorted(r['sync_index'].items()))
+            if os.path.basename(path) in chosen and all(k in r['files'] for k in ('head', 'right', 'left')):
+                mosaic(*((r['folder'].joinpath(r['files'][k]), r['sync_index'][k]) for k in ('head', 'right', 'left')),
+                    r['n_frames'], r['folder'].joinpath(f"{rec}_mosaic.mp4"), mosaic_fps, mosaic_encoder,
+                    source_fps=r['fps'])
+                msg += ', mosaic'
+            print(msg, flush=True)
+            done += 1
+        except Exception as e:
+            failed += 1
+            print(f"{n}/{len(files)} {rec}: FAILED {type(e).__name__}: {e}", flush=True)
+        finally:
+            if local != path and os.path.exists(local):
+                os.remove(local)
+    print(f"done: {done} exported, {failed} failed (rerun to retry; existing recordings are skipped)")
 
 # %%
 if __name__ == "__main__":

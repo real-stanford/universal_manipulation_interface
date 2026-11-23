@@ -521,24 +521,31 @@ annotations, or with `--no_annotations`: no `annotations.json`; task text, famil
 declared in the delivery yaml (`outcome` `unknown` where not declared). `validation_status` is
 `not_run` (no quality checks).
 
-### 7. Rhoda delivery (three files per recording)
+### 7. Rhoda delivery (three files per recording, from the MCAPs)
 
-The data PRD's UMI delivery: one folder per recording (episode) with the three camera videos, the
-per-frame data and the metadata. The videos are not re-encoded.
+The data PRD's UMI delivery, made from the episode MCAP files (step 5 / `process_station.py
+--mcap`): one folder per recording (episode) with the three camera videos, the metadata and the
+per-frame data. The videos are not re-encoded.
 
 ```
-python scripts_tag_tracking/14_export_rhoda.py -i <session> -c <config> -o <out> --name <station>_<date>_<task> [--mosaic 3]
+python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <out> [--mosaic 3]
 ```
+
+Input: one MCAP, a folder or `s3://` prefix with MCAPs below it, or the paths CSV of
+`describe_mcaps.py --list_only`. S3 files are downloaded one at a time and deleted after.
+Recording name: task folder + file name (`station3/2026-11-21/task01/episode_000012.mcap` ->
+`station3_2026-11-21_task01_episode_000012`). Recordings already exported are skipped.
 
 | File | Content |
 |---|---|
-| `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the cameras' original H.265, copied from the keyframe at or before the episode's first step to its last step (GoPro: one keyframe per second, so up to 1 s before the episode); tagged `hvc1` for QuickTime / Safari |
-| `<rec>_frames.csv` | one row per step: the frame index of the step in each file, time from the first step, per gripper (`right` = robot0, `left` = robot1) width in m (0 = fully closed), `pose_valid` and TCP pose in the world frame (m, quaternion xyzw), empty where `pose_valid` is 0 |
-| `<rec>_meta.json` | per camera model, lens, field of view, resolution, frame rate, Kannala-Brandt intrinsics and their source; sync method, sync event and `sync_frame_index` per file, wrist clock corrections and uncertainty; gripper width and TCP conventions |
-| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` episodes evenly over the session, or `--mosaic_episodes`): head on top, right and left wrist below, from the sync frames on, H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
+| `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the MCAP's camera videos (the GoPro's H.265, already synchronized), moved into mp4 by stream copy: parameter sets in the header, tagged `hvc1` (QuickTime / Safari), faststart. Each file starts where the MCAP video starts: at the keyframe before the episode, up to 1 s |
+| `<rec>_meta.json` | per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); sync method, the sync event and `sync_frame_index` per file, clock corrections and uncertainty; gripper width and TCP conventions |
+| `<rec>_frames.csv` | one row per step: the frame index of the step in each file, time from the first step, per gripper (`right` = robot0, `left` = robot1) width in m (0 = fully closed), `pose_valid` and TCP pose (world frame, m, quaternion xyzw; empty where `pose_valid` is 0) |
+| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` per task folder, or `--mosaic_files`): head on top, right and left wrist below, each from its sync frame, stacked frame by frame; H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
 
-The sync event is the episode's first step, the same instant in all three files (each camera's frame
-nearest to it, within half a frame): frame f of a file belongs to step `f - sync_frame_index`.
+Sync: the sync event is the episode's first step, the same instant in all three files (each
+camera's frame nearest to it, within half a frame). Frame f of a file belongs to step
+`f - sync_frame_index`; `frames.csv` lists the frame of every step in every file.
 
 ## Frame sync check
 
