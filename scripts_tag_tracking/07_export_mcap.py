@@ -31,6 +31,10 @@ from the MP4 header inserted into every keyframe (after the access unit
 delimiter), as Foxglove CompressedVideo requires. Each camera's video starts
 at the keyframe before the episode (GoPro: one keyframe per second), so the
 first video messages can precede the first pose message by up to 1 s.
+--exact_start: every camera's video starts exactly at its frame of the episode's
+first step instead; the frames from there to the next keyframe are re-encoded
+(libx265, no B-frames, first one a keyframe), the rest is the original stream.
+Metadata recording video_start: exact / keyframe.
 
 python scripts_tag_tracking/07_export_mcap.py -i data_workspace/session -c umi_calib/tag_tracking.yaml --episodes 0,1,2
 """
@@ -155,6 +159,77 @@ def video_messages(video_path: str, start_frame: int, stop_frame: int):
             yield index, to_annexb(bytes(packet), length_size, parameter_sets, packet.is_keyframe)
 
 
+def video_messages_exact(video_path: str, start_frame: int, stop_frame: int, crf: int = 16):
+    """
+    (frame index, Annex B data) of frames [start_frame, stop_frame) exactly, no frames before
+    start_frame: the frames from start_frame up to the next keyframe are decoded (from the
+    keyframe before start_frame) and re-encoded as H.265 (libx265, first frame a keyframe, no
+    B-frames, Main profile, full range like the GoPro stream), the rest is the original stream
+    (from its next keyframe, which carries the original VPS / SPS / PPS). Only the first GOP is
+    re-encoded (at most one second at GoPro's one keyframe per second).
+    """
+    from fractions import Fraction
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        assert stream.codec_context.name == 'hevc', f"{video_path}: {stream.codec_context.name}, expected hevc"
+        extradata = bytes(stream.codec_context.extradata)
+        length_size = (extradata[21] & 3) + 1
+        parameter_sets = hevc_parameter_sets(extradata)
+        fps = float(stream.average_rate)
+        frame_time = lambda pts: float(pts * stream.time_base) - float((stream.start_time or 0) * stream.time_base)
+        container.seek(int(max(0.0, start_frame / fps - 0.001) / stream.time_base), stream=stream,
+            backward=True, any_frame=False)
+        decoder = av.CodecContext.create('hevc', 'r')
+        decoder.extradata = extradata
+        encoder = None
+        head, n_encoded = list(), 0     # re-encoded frames before the next original keyframe
+        started, copying = False, False
+        for packet in container.demux(stream):
+            if packet.size == 0 or packet.pts is None:
+                continue
+            index = int(round(frame_time(packet.pts) * fps))
+            if index >= stop_frame:
+                break
+            if not started:
+                if not packet.is_keyframe:
+                    continue
+                assert index <= start_frame, f"{video_path}: first keyframe {index} after episode start {start_frame}"
+                started = True
+                if index == start_frame:   # the episode starts on a keyframe: the original stream as it is
+                    copying = True
+            if not copying and packet.is_keyframe and index >= start_frame:
+                copying = True             # a keyframe at or after the start: from here the original stream
+            if copying:
+                if encoder is not None:    # flush the re-encoded start first
+                    for p in encoder.encode(None):
+                        head.append(bytes(p))
+                    for i, data in enumerate(head):
+                        yield start_frame + i, data
+                    encoder, head = None, list()
+                yield index, to_annexb(bytes(packet), length_size, parameter_sets, packet.is_keyframe)
+                continue
+            # before the next keyframe: decode, re-encode from start_frame on
+            for frame in decoder.decode(av.Packet(bytes(packet))):
+                if index < start_frame:
+                    continue
+                if encoder is None:
+                    encoder = av.CodecContext.create('libx265', 'w')
+                    encoder.width, encoder.height = frame.width, frame.height
+                    encoder.pix_fmt = frame.format.name
+                    encoder.time_base = Fraction(1, 1) / Fraction(stream.average_rate)
+                    encoder.options = {'preset': 'fast', 'crf': str(crf), 'x265-params':
+                        'bframes=0:repeat-headers=1:aud=1:open-gop=0:keyint=600:range=full:log-level=error'}
+                frame.pts = n_encoded
+                n_encoded += 1
+                for p in encoder.encode(frame):
+                    head.append(bytes(p))
+        if encoder is not None:            # the episode ended before the next keyframe
+            for p in encoder.encode(None):
+                head.append(bytes(p))
+            for i, data in enumerate(head):
+                yield start_frame + i, data
+
+
 def frame0_time(camera: dict, times: np.ndarray, dt: float) -> float:
     """
     Session clock time of the camera video's frame 0: from the plan (06, wrist
@@ -198,7 +273,7 @@ def head_extras(plan_episode, demos_dir, config, tracks: dict) -> dict:
 
 
 def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video_fps, tcps_in_camera,
-        camera_records=None, sync_record=None, time_offset=0.0, head=None):
+        camera_records=None, sync_record=None, time_offset=0.0, head=None, exact_start=False):
     """
     head (head_extras): head camera poses of the episode's head frames and its IMU time offset, or None.
     """
@@ -282,7 +357,8 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
                 with av.open(str(video_path)) as container:
                     image_size = (container.streams.video[0].width, container.streams.video[0].height)
             video = channel(f'/cameras/camera{c}/video', 'foxglove.CompressedVideo', {'stream_type': 'color'})
-            for index, data in video_messages(str(video_path), start, stop):
+            messages = video_messages_exact if exact_start else video_messages
+            for index, data in messages(str(video_path), start, stop):
                 t = frame0_time(camera, times, dt) + index * dt
                 write(video, t, {'timestamp': stamp_(t), 'frame_id': f'camera{c}', 'format': 'h265',
                     'data': base64.b64encode(data).decode()})
@@ -300,6 +376,9 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
             **{f'robot{g}': side for g, side in zip(range(len(grippers)), ROBOT_SIDES)},
             **{f'camera{c}': f'robot{c}_wrist' if c < len(grippers) else 'head' for c in range(len(cameras))},
             'world_frame': f'tag{world_tag}',
+            # exact: every camera's video starts at its frame of the episode's first step (start re-encoded);
+            # keyframe: at the keyframe before it (up to 1 s earlier, original stream only)
+            'video_start': 'exact' if exact_start else 'keyframe',
             'eef_frame': 'tcp',
             # TCP in each gripper's wrist camera frame, one key if all grippers share it
             **({'tcp_in_camera_m': ','.join(f'{x:g}' for x in tcps_in_camera[0])} if len(set(tcps_in_camera)) == 1
@@ -350,8 +429,10 @@ def verify(path) -> str:
 @click.option('-e', '--episodes', default=None, help='Comma separated episode indices of the plan, default all')
 @click.option('-c', '--config', default=None,
     help='Tag tracking config: adds the camera (model, lens, intrinsics) and sync metadata records')
+@click.option('--exact_start', is_flag=True, default=False,
+    help='Videos start exactly at the episode start frame (first second re-encoded), no keyframe lead-in')
 @click.option('-j', '--num_workers', type=int, default=None, help='Episodes written in parallel, default all cores')
-def main(input, output, episodes, config, num_workers):
+def main(input, output, episodes, config, exact_start, num_workers):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     output = session.joinpath('dataset_mcap') if output is None else pathlib.Path(os.path.expanduser(output)).absolute()
     output.mkdir(parents=True, exist_ok=True)
@@ -406,7 +487,8 @@ def main(input, output, episodes, config, num_workers):
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_workers, len(indices)),
             mp_context=multiprocessing.get_context('spawn')) as executor:
         futures = {executor.submit(write_episode, str(output.joinpath(f'episode_{k:06d}.mcap')), k, plan[k],
-            demos_dir, world_tag, video_fps, tcps_in_camera, camera_records[k], sync_records[k], 0.0, heads[k]): k
+            demos_dir, world_tag, video_fps, tcps_in_camera, camera_records[k], sync_records[k], 0.0, heads[k],
+            exact_start): k
             for k in indices}
         for future in concurrent.futures.as_completed(futures):
             path = future.result()
