@@ -3,7 +3,8 @@ One CSV row per episode MCAP (07_export_mcap.py) saying what happens in it: --fr
 frames (default 6, evenly over the episode) are decoded from the MCAP and Claude describes the
 task from them (structured JSON: task sentence, objects, hands used, visible outcome, notes).
 
-Input: a folder or s3:// prefix with MCAP files anywhere below it (as report_episodes.py). On S3
+Input: a folder or s3:// prefix with MCAP files anywhere below it (as report_episodes.py), or a
+CSV of exact MCAP paths (columns task, path, size_bytes; --list_only writes it from a folder). On S3
 only the parts of each file holding those frames and the metadata are read (ranged reads, aws
 CLI), not the whole file.
 
@@ -16,7 +17,8 @@ model. Rows already in the CSV are skipped, so a run can be stopped and continue
 Needs the anthropic package and Anthropic credentials (ANTHROPIC_API_KEY or `ant auth login`).
 Cost: about 6 images + 300 words of answer per MCAP.
 
-python scripts_tag_tracking/describe_mcaps.py s3://my-bucket/umi_data/industrial_data/ -o mcap_tasks.csv [--sheets sheets/]
+python scripts_tag_tracking/describe_mcaps.py s3://my-bucket/umi_data/industrial_data/ -o mcap_paths.csv --list_only
+python scripts_tag_tracking/describe_mcaps.py mcap_paths.csv -o mcap_tasks.csv [--sheets sheets/]
 """
 # %%
 import sys
@@ -28,10 +30,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # %%
 import base64
+import collections
 import concurrent.futures
 import csv
 import json
 import pathlib
+import subprocess
 import threading
 import click
 import av
@@ -87,6 +91,28 @@ def nal_types(data: bytes) -> set:
 def is_keyframe(data: bytes) -> bool:
     # 07_export_mcap.py puts VPS / SPS / PPS (32-34) into every keyframe; IRAP pictures are 16-23
     return bool(nal_types(data) & {32, 16, 17, 18, 19, 20, 21})
+
+
+def read_paths_csv(path: str) -> list:
+    """
+    (path, size, task) of the MCAP files listed in a CSV with columns task, path, size_bytes
+    (--list_only writes it; rows can be removed, or added without size_bytes).
+    """
+    rows = list(csv.DictReader(open(os.path.expanduser(path))))
+    assert rows and 'path' in rows[0], f"{path}: needs a 'path' column (and task, size_bytes)"
+    out = list()
+    for r in rows:
+        size = r.get('size_bytes')
+        if size:
+            size = int(size)   # exact: an S3 MCAP is read from its end
+        elif r['path'].startswith('s3://'):
+            size = int(json.loads(subprocess.run(['aws', 's3api', 'head-object', '--bucket',
+                r['path'][5:].split('/', 1)[0], '--key', r['path'][5:].split('/', 1)[1], '--query', 'ContentLength'],
+                check=True, capture_output=True, text=True).stdout))
+        else:
+            size = os.path.getsize(os.path.expanduser(r['path']))
+        out.append((r['path'], size, r.get('task') or '.'))
+    return out
 
 
 def open_mcap(path: str, size: int):
@@ -191,11 +217,25 @@ def describe(client, model: str, effort: str, frames: list, duration: float) -> 
 @click.option('--effort', default='low', type=click.Choice(['low', 'medium', 'high']),
     help='Describing a few frames needs little reasoning')
 @click.option('--dry_run', is_flag=True, default=False, help='Frames and sheets only, no API call, no CSV')
+@click.option('--list_only', is_flag=True, default=False,
+    help='Only write the MCAP paths found under ROOT (task, path, size_mb) to -o, then stop')
 @click.option('-j', '--jobs', type=int, default=4, help='MCAP files in parallel')
-def main(root, output, n_frames, sheets, model, effort, dry_run, jobs):
+def main(root, output, n_frames, sheets, model, effort, dry_run, list_only, jobs):
     av.logging.set_level(av.logging.ERROR)   # swscaler 'deprecated pixel format' per frame
-    files = list_mcaps(root)
+    files = read_paths_csv(root) if root.endswith('.csv') else list_mcaps(root)
     assert files, f"no .mcap files under {root}"
+    if list_only:
+        rows = sorted((task or '.', path, size) for path, size, task in files)
+        out = pathlib.Path(os.path.expanduser(output))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open('w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['task', 'path', 'size_bytes'])
+            w.writerows(rows)
+        for task, n in sorted(collections.Counter(r[0] for r in rows).items()):
+            print(f"{task:<44} {n:>5} MCAP files")
+        print(f"{len(rows)} MCAP files ({sum(r[2] for r in rows) / 1e9:.1f} GB); saved {out}")
+        return
     output = pathlib.Path(os.path.expanduser(output))
     done = set()
     if output.is_file():
