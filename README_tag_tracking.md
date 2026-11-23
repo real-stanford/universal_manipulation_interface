@@ -430,6 +430,15 @@ for every step of both grippers) and episodes kept with tracking gaps:
 python scripts_tag_tracking/report_episodes.py <folder or s3://...> [--csv episodes.csv]
 ```
 
+What happens in each MCAP, one CSV row per file: 6 head camera frames per MCAP (decoded from
+the MCAP, ranged reads on S3) described by Claude: task sentence, objects, hands used, visible
+outcome, notes. Rows already in the CSV are skipped (a stopped run continues); `--sheets <dir>`
+saves the frames Claude saw; `--dry_run` makes only the sheets. Needs Anthropic credentials.
+
+```
+python scripts_tag_tracking/describe_mcaps.py <folder or s3://...> -o mcap_tasks.csv [--sheets <dir>]
+```
+
 ```
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config>
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config> --random 10
