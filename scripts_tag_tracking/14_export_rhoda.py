@@ -36,7 +36,10 @@ the date / task + file name, no station (.../station2/2026-11-22/task01/episode_
 export, mosaic, upload), the CPU cores split between them. S3 input is downloaded into -w and deleted
 after the export; with S3 output each recording folder is written in -w, uploaded (meta.json last,
 sizes checked) and deleted, so the disk holds only the recordings in progress. Recordings whose
-meta.json is in the output are skipped (a stopped run continues).
+meta.json is in the output are skipped (a stopped run continues). Each recording's files are checked
+before the upload (frame counts, codecs, frame rate, gripper widths, meta); a failed recording (frame
+drop, too few frames, check, download, upload) is not written. report.json per task folder in
+<output>/<task>/: per episode ok (frames, mosaic) / failed (reason, detail) / skipped.
 
 python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <out> [--mosaic 3]
 python scripts_tag_tracking/14_export_rhoda.py s3://bucket/mcaps/station1 -o s3://bucket/rhoda/station1 -w ~/rhoda_work -j 8 --mosaic 3
@@ -54,6 +57,7 @@ import base64
 import collections
 import concurrent.futures
 import csv
+import datetime
 import json
 import pathlib
 import re
@@ -229,54 +233,164 @@ def s3_size(url: str):
     return int(out.stdout) if out.returncode == 0 else None
 
 
-def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mosaic: bool, encoder: str,
-        threads: int, overwrite: bool) -> str:
+class OutputCheckError(Exception):
+    pass
+
+
+def check_outputs(folder: pathlib.Path, rec: str, r: dict, with_mosaic: bool):
     """
-    One recording into <output>/<task>/<episode>/ (the input's folder structure, the folder named as
-    the MCAP file), files <rec>_head.mp4, ... (rec: task folder + file name): download (S3 input)
-    into workdir, export, mosaic, upload (S3 output; meta.json last, every file's size checked), then
-    delete the download and, with S3 output, the local folder. Returns a one-line summary.
+    The written recording before it is uploaded: every camera mp4 H.265 with one frame per step at
+    the cameras' frame rate and one resolution, the mosaic H.264 with the same frame count, the
+    gripper CSVs one width per frame, meta.json with sync frame index 0. Raises OutputCheckError.
+    """
+    n = r['n_frames']
+
+    def probe(path):
+        out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries',
+            'stream=codec_name,width,height,r_frame_rate,nb_read_packets', '-of', 'json', str(path)],
+            capture_output=True, text=True)
+        streams = json.loads(out.stdout or '{}').get('streams') if out.returncode == 0 else None
+        if not streams:
+            raise OutputCheckError(f"{path.name}: not readable")
+        return streams[0]
+
+    sizes = set()
+    for role, name in r['files'].items():
+        p = probe(folder.joinpath(name))
+        if p['codec_name'] != 'hevc' or int(p['nb_read_packets']) != n:
+            raise OutputCheckError(f"{name}: {p['codec_name']}, {p['nb_read_packets']} frames, {n} expected")
+        if r['fps'] and abs(float(Fraction(p['r_frame_rate'])) - r['fps']) > 0.01:
+            raise OutputCheckError(f"{name}: {p['r_frame_rate']} fps, {r['fps']} expected")
+        sizes.add((p['width'], p['height']))
+    if len(sizes) > 1:
+        raise OutputCheckError(f"camera resolutions differ: {sorted(sizes)}")
+    if with_mosaic:
+        p = probe(folder.joinpath(f"{rec}_mosaic.mp4"))
+        if p['codec_name'] != 'h264' or int(p['nb_read_packets']) != n:
+            raise OutputCheckError(f"mosaic: {p['codec_name']}, {p['nb_read_packets']} frames, {n} expected")
+    for side in ROBOT_SIDES:
+        path = folder.joinpath(f"{rec}_{side}_gripper.csv")
+        if side in r['files'] and path.is_file():
+            rows = list(csv.reader(path.open()))[1:]
+            if len(rows) != n or any(len(row) < 2 or row[1] == '' for row in rows):
+                raise OutputCheckError(f"{path.name}: {len(rows)} rows, {n} expected, or empty widths")
+    meta = json.loads(folder.joinpath(f"{rec}_meta.json").read_text())
+    if set(meta['files']) != set(r['files']) or any(v != 0 for v in meta['sync']['frame_index'].values()):
+        raise OutputCheckError("meta.json: files or sync frame index wrong")
+
+
+def failure_reason(stage: str, e: Exception) -> str:
+    text = str(e)
+    if isinstance(e, OutputCheckError):
+        return 'output_check'
+    if stage in ('download', 'upload'):
+        return stage
+    if 'not evenly spaced' in text:
+        return 'frame_drop'
+    if 'not one per step' in text or 'frames after the cut' in text:
+        return 'frame_count'
+    return 'other'
+
+
+def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mosaic: bool, encoder: str,
+        threads: int, overwrite: bool) -> dict:
+    """
+    One recording into <output>/<task>/<episode>/ (the folder named as the MCAP file), files
+    <rec>_head.mp4, ... (rec: date / task + file name): download (S3 input) into workdir, export,
+    mosaic, check (check_outputs), upload (S3 output; meta.json last, every file's size checked),
+    then delete the download and, with S3 output, the local folder. A failed recording is not
+    uploaded and its local folder is deleted. Returns its report entry (task, episode, status,
+    frames, mosaic / reason, detail).
     """
     rec = recording_name(task, path)
     episode = os.path.basename(path).rsplit('.', 1)[0]
     s3_out = output.startswith('s3://')
     rel = '/'.join(p for p in (task or '').split('/') if p and p != '.')
-    label = '/'.join(x for x in (rel, episode) if x)
     target = '/'.join(x for x in (output.rstrip('/'), rel, episode) if x)    # the recording's folder
-    meta = f"{target}/{rec}_meta.json"
-    if not overwrite and (s3_size(meta) is not None if s3_out else os.path.isfile(meta)):
-        return f"{label}: in the output, skipped"
+    entry = {'task': rel, 'episode': episode}
+    if not overwrite and (s3_size(f"{target}/{rec}_meta.json") is not None if s3_out
+            else os.path.isfile(f"{target}/{rec}_meta.json")):
+        return {**entry, 'status': 'skipped'}
     # S3 output: written in workdir/<task>/<episode> (episodes of the same name in other tasks run in parallel)
     out_dir = workdir.joinpath(rel) if s3_out else pathlib.Path(target).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     local = str(workdir.joinpath(f".{rec}.mcap")) if path.startswith('s3://') else path
     folder = out_dir.joinpath(episode)
+    stage, ok = 'download', False
     try:
         if local != path:
-            subprocess.run(['aws', 's3', 'cp', path, local, '--only-show-errors'], check=True)
+            subprocess.run(['aws', 's3', 'cp', path, local, '--only-show-errors'], check=True, capture_output=True)
+        stage = 'export'
         r = export_mcap(local, rec, out_dir, threads, folder_name=episode)
         if local != path:
             os.remove(local)                # the MCAP is not needed for the mosaic
-        msg = f"{label}: {r['n_frames']} frames in every file, start re-encoded: " + \
-            (', '.join(k for k, v in sorted(r['reencoded'].items()) if v) or 'none')
-        if make_mosaic and all(k in r['files'] for k in ('head', 'right', 'left')):
+        with_mosaic = make_mosaic and all(k in r['files'] for k in ('head', 'right', 'left'))
+        if with_mosaic:
             mosaic(*((folder.joinpath(r['files'][k]), r['sync_index'][k]) for k in ('head', 'right', 'left')),
                 r['n_frames'], folder.joinpath(f"{rec}_mosaic.mp4"), r['fps'], encoder, threads=threads)
-            msg += ', mosaic'
+        check_outputs(folder, rec, r, with_mosaic)
         if s3_out:
+            stage = 'upload'
             names = sorted(p.name for p in folder.iterdir())
             names = [n for n in names if not n.endswith('_meta.json')] + [n for n in names if n.endswith('_meta.json')]
             for name in names:              # meta.json last: a recording with meta.json on S3 is complete
                 url = f"{target}/{name}"
-                subprocess.run(['aws', 's3', 'cp', str(folder.joinpath(name)), url, '--only-show-errors'], check=True)
+                subprocess.run(['aws', 's3', 'cp', str(folder.joinpath(name)), url, '--only-show-errors'],
+                    check=True, capture_output=True)
                 assert s3_size(url) == folder.joinpath(name).stat().st_size, f"{url}: uploaded size differs"
-            msg += ', uploaded'
-        return msg
+        ok = True
+        return {**entry, 'status': 'ok', 'frames': r['n_frames'], 'mosaic': with_mosaic}
+    except Exception as e:
+        stderr = getattr(e, 'stderr', None)
+        stderr = stderr.decode(errors='replace') if isinstance(stderr, bytes) else stderr
+        detail = (stderr.strip() if stderr else str(e)).replace(str(local), '').strip(' :')
+        return {**entry, 'status': 'failed', 'reason': failure_reason(stage, e), 'detail': detail.splitlines()[-1][:300]
+            if detail else type(e).__name__}
     finally:
         if local != path and os.path.exists(local):
             os.remove(local)
-        if s3_out and folder.exists():
-            shutil.rmtree(folder)
+        if (s3_out or not ok) and folder.exists():
+            shutil.rmtree(folder)           # S3: uploaded or failed; local: a failed recording is not kept
+
+
+def write_reports(entries: list, source: str, output: str, workdir: pathlib.Path):
+    """
+    report.json per task folder, in <output>/<task>/ (uploaded with S3 output): this run's time,
+    input and output, counts, and per episode its status (ok: frames, mosaic; failed: reason,
+    detail). Episodes skipped in this run keep their entry of the previous report.json.
+    """
+    by_task = collections.defaultdict(list)
+    for e in entries:
+        by_task[e['task']].append(e)
+    for task, items in sorted(by_task.items()):
+        folder = '/'.join(x for x in (output.rstrip('/'), task) if x)
+        url = f"{folder}/report.json"
+        local = workdir.joinpath(task, 'report.json') if output.startswith('s3://') else pathlib.Path(url)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        previous = dict()
+        if output.startswith('s3://'):
+            if subprocess.run(['aws', 's3', 'cp', url, str(local), '--only-show-errors'], capture_output=True).returncode != 0:
+                local.unlink(missing_ok=True)
+        if local.is_file():
+            previous = {e['episode']: e for e in json.loads(local.read_text()).get('episodes', [])}
+        episodes = list()
+        for e in sorted(items, key=lambda e: e['episode']):
+            e = {k: v for k, v in e.items() if k != 'task'}
+            if e['status'] == 'skipped' and previous.get(e['episode'], {}).get('status') == 'ok':
+                e = previous[e['episode']]
+            episodes.append(e)
+        report = {
+            'run': {'time_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'input': source, 'output': folder},
+            'summary': {'total': len(episodes), **{s: sum(e['status'] == s for e in episodes)
+                for s in ('ok', 'failed', 'skipped')}},
+            'episodes': episodes,
+        }
+        local.write_text(json.dumps(report, indent=2))
+        if output.startswith('s3://'):
+            subprocess.run(['aws', 's3', 'cp', str(local), url, '--only-show-errors'], check=True)
+            local.unlink()
+        print(f"report: {url} ({report['summary']})", flush=True)
 
 
 # %%
@@ -325,19 +439,22 @@ def main(source, output, workdir, jobs, n_mosaic, mosaic_files, mosaic_encoder, 
     print(f"{len(files)} MCAP files in {len(by_task)} task folders -> {output}, {jobs} jobs"
         + (f" x {threads} threads" if threads else ''), flush=True)
 
-    done, failed = 0, 0
+    entries = list()
     with concurrent.futures.ProcessPoolExecutor(jobs) as pool:
-        futures = {pool.submit(export_one, path, task, output, workdir, path in chosen,
-            mosaic_encoder, threads, overwrite): (path, task) for path, _, task in sorted(files, key=lambda f: (f[2], f[0]))}
+        futures = [pool.submit(export_one, path, task, output, workdir, path in chosen, mosaic_encoder, threads, overwrite)
+            for path, _, task in sorted(files, key=lambda f: (f[2], f[0]))]
         for n, future in enumerate(concurrent.futures.as_completed(futures), 1):
-            path, task = futures[future]
-            try:
-                print(f"{n}/{len(files)} {future.result()}", flush=True)
-                done += 1
-            except Exception as e:
-                failed += 1
-                print(f"{n}/{len(files)} {task}/{os.path.basename(path)}: FAILED {type(e).__name__}: {e}", flush=True)
-    print(f"done: {done} ok, {failed} failed (rerun to retry; recordings in the output are skipped)")
+            e = future.result()
+            entries.append(e)
+            name = '/'.join(x for x in (e['task'], e['episode']) if x)
+            what = {'ok': lambda: f"ok, {e['frames']} frames" + (', mosaic' if e['mosaic'] else ''),
+                'skipped': lambda: 'in the output, skipped',
+                'failed': lambda: f"FAILED {e['reason']}: {e['detail']}"}[e['status']]()
+            print(f"{n}/{len(files)} {name}: {what}", flush=True)
+    write_reports(entries, source, output, workdir)
+    counts = collections.Counter(e['status'] for e in entries)
+    print(f"done: {counts['ok']} ok, {counts['failed']} failed, {counts['skipped']} skipped "
+        f"(rerun to retry the failed; recordings in the output are skipped)")
 
 # %%
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ def probe(path):
     return json.loads(out)['streams'][0]
 
 
-def make_mcap(tmp, exact=True):
+def make_mcap(tmp, exact=True, drop=None):
     """
     Episode of N steps at 30 fps from t = 10 s. Camera c: video frames from its keyframe before the
     episode start frame start[c]; frame index i of the source video shows the number i.
@@ -46,7 +46,7 @@ def make_mcap(tmp, exact=True):
     src = os.path.join(tmp, 'src.mp4')
     make_video(src)
     starts = {0: 45, 1: 44, 2: 47}           # camera0 right wrist, camera1 left wrist, camera2 head
-    path = os.path.join(tmp, 'episode_000012.mcap' if exact else 'episode_000013.mcap')
+    path = os.path.join(tmp, 'episode_000014.mcap' if drop else 'episode_000012.mcap' if exact else 'episode_000013.mcap')
     dt = 1 / FPS
     ns = lambda t: int(round(t * 1e9))
     with open(path, 'wb') as f:
@@ -57,6 +57,8 @@ def make_mcap(tmp, exact=True):
             ch = w.register_channel(f'/cameras/camera{c}/video', 'json', s)
             messages = export.video_messages_exact if exact else export.video_messages
             for index, data in messages(src, start, start + N):
+                if drop == (c, index - start):        # a dropped frame: camera c, episode frame k
+                    continue
                 t = 10 + (index - start) * dt       # step 0 at t = 10 for every camera
                 w.add_message(ch, log_time=ns(t), publish_time=ns(t), data=json.dumps(
                     {'data': base64.b64encode(data).decode(), 'format': 'h265'}).encode())
@@ -147,15 +149,40 @@ def test_jobs_and_s3():
         result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2',
             '--mosaic_files', 'episode_000002.mcap'])
         assert result.exit_code == 0 and 'done: 2 ok, 0 failed' in result.output, result.output
+        report = json.load(open(out.joinpath('station1', 'task02', 'report.json')))
+        assert report['summary'] == {'total': 2, 'ok': 2, 'failed': 0, 'skipped': 0}, report
+        assert report['episodes'] == [{'episode': 'episode_000001', 'status': 'ok', 'frames': N, 'mosaic': False},
+            {'episode': 'episode_000002', 'status': 'ok', 'frames': N, 'mosaic': True}], report['episodes']
         out = out.joinpath('station1', 'task02')      # the input's folder structure, a folder per episode
-        assert sorted(os.listdir(out)) == ['episode_000001', 'episode_000002'], os.listdir(out)
+        assert sorted(os.listdir(out)) == ['episode_000001', 'episode_000002', 'report.json'], os.listdir(out)
         assert sorted(os.listdir(out.joinpath('episode_000002'))) == sorted(f"task02_episode_000002_{x}" for x in
             ['head.mp4', 'left.mp4', 'right.mp4', 'meta.json', 'right_gripper.csv', 'left_gripper.csv', 'mosaic.mp4'])
         assert len(os.listdir(out.joinpath('episode_000001'))) == 6
         assert int(probe(out.joinpath('episode_000002', 'task02_episode_000002_mosaic.mp4'))['nb_read_frames']) == N
         out = pathlib.Path(tmp, 'rhoda')
+        # rerun with a dropped head frame in a new episode: it fails (frame_drop) and is not written,
+        # the two done ones are skipped and keep their report entries
+        shutil.copy(make_mcap(tmp, drop=(2, 20))[0], src.joinpath('episode_000003.mcap'))
         result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2'])
-        assert result.output.count('in the output, skipped') == 2, result.output
+        assert result.output.count('in the output, skipped') == 2 and 'FAILED frame_drop' in result.output, result.output
+        assert not out.joinpath('station1', 'task02', 'episode_000003').exists()
+        report = json.load(open(out.joinpath('station1', 'task02', 'report.json')))
+        assert report['summary'] == {'total': 3, 'ok': 2, 'failed': 1, 'skipped': 0}, report
+        failed = report['episodes'][2]
+        assert failed['episode'] == 'episode_000003' and failed['status'] == 'failed' and failed['reason'] == 'frame_drop' \
+            and 'camera2' in failed['detail'], failed
+        os.remove(src.joinpath('episode_000003.mcap'))
+
+        # a written file that does not pass the check: output_check
+        bad = dict(rhoda.export_mcap(path, 'chk', pathlib.Path(tmp, 'chk')), sync_index={'right': 0, 'left': 0, 'head': 0})
+        folder = pathlib.Path(tmp, 'chk', 'chk')
+        rhoda.check_outputs(folder, 'chk', bad, False)
+        folder.joinpath('chk_left_gripper.csv').write_text('frame,width_m\n0,\n')
+        try:
+            rhoda.check_outputs(folder, 'chk', bad, False)
+            raise RuntimeError('check passed a broken CSV')
+        except rhoda.OutputCheckError as e:
+            assert 'chk_left_gripper.csv' in str(e) and rhoda.failure_reason('export', e) == 'output_check'
 
         # --mosaic 2 per task folder: first and last of each task (task03: 0, 2; task04: 0, 4), not the
         # same file names in every task (by name task04 would also get episode 2: 5 mosaics)
@@ -179,6 +206,8 @@ def test_jobs_and_s3():
             if cmd[:3] == ['aws', 's3', 'cp']:
                 a, b = cmd[3], cmd[4]
                 if a.startswith('s3://'):
+                    if a not in bucket:        # no such key: aws fails
+                        return subprocess.CompletedProcess(cmd, 1, '', 'Not Found')
                     shutil.copy(bucket[a], b)
                 else:
                     keep = pathlib.Path(tmp, 'bucket', b[5:])
@@ -203,16 +232,20 @@ def test_jobs_and_s3():
         try:
             work = pathlib.Path(tmp, 'work')
             work.mkdir()
-            msg = rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02', 's3://out/rhoda',
+            entry = rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02', 's3://out/rhoda',
                 work, True, 'libx264', 2, False)
+            assert entry == {'task': 'station1/task02', 'episode': 'episode_000001', 'status': 'ok', 'frames': N,
+                'mosaic': True}, entry
+            rhoda.write_reports([entry], 's3://in/station1', 's3://out/rhoda', work)
         finally:
             rhoda.subprocess.run = real_run
-        assert 'mosaic, uploaded' in msg, msg
+        report = json.load(open(bucket['s3://out/rhoda/station1/task02/report.json']))
+        assert report['run']['output'] == 's3://out/rhoda/station1/task02' and report['summary']['ok'] == 1, report
         rec = 'task02_episode_000001'
-        assert len(uploads) == 7 and uploads[-1] == f's3://out/rhoda/station1/task02/episode_000001/{rec}_meta.json', uploads
+        assert len(uploads) == 8 and uploads[6] == f's3://out/rhoda/station1/task02/episode_000001/{rec}_meta.json', uploads
         assert sorted(os.listdir(work)) == ['station1'] and not list(work.rglob('*.*')), list(work.rglob('*'))
-        assert 'skipped' in rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02',
-            's3://out/rhoda', work, True, 'libx264', 2, False)
+        assert rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02',
+            's3://out/rhoda', work, True, 'libx264', 2, False)['status'] == 'skipped'
 
 
 if __name__ == '__main__':

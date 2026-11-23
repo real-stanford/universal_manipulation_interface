@@ -545,6 +545,27 @@ written in `-w`, uploaded (meta.json last, sizes checked) and deleted; S3 input 
 and deleted after the export, so the disk holds only the recordings in progress. Recordings whose
 `meta.json` is in the output are skipped (rerun to continue).
 
+Before the upload each recording's files are checked: every mp4 one frame per episode step (H.265,
+the cameras' frame rate, one resolution), the mosaic the same frame count (H.264), the gripper CSVs
+one width per frame, `meta.json` sync frame index 0. A recording that fails (a dropped frame, too few
+frames, the check, download or upload) is not written. Per task folder `<output>/<task>/report.json`:
+
+```json
+{
+  "run": {"time_utc": "2026-11-23T17:20:00Z", "input": "s3://.../station2/2026-11-22/task01/",
+          "output": "s3://.../industrial_data_mp4/station2/2026-11-22/task01"},
+  "summary": {"total": 15, "ok": 14, "failed": 1, "skipped": 0},
+  "episodes": [
+    {"episode": "episode_000004", "status": "ok", "frames": 1161, "mosaic": true},
+    {"episode": "episode_000009", "status": "failed", "reason": "frame_drop",
+     "detail": "camera2: frames not evenly spaced (dropped frames?)"}
+  ]
+}
+```
+
+`reason`: `frame_drop`, `frame_count`, `output_check`, `download`, `upload`, `other`. Episodes skipped
+in a rerun keep their entry from the previous report.
+
 MCAPs exported without `--exact_start` (all of `process_station.py --mcap` so far) start each camera
 at the keyframe before the episode; the export re-encodes per camera only the frames from the episode
 start to the next keyframe (at most 1 s, 07's `--exact_start` code) in memory and copies the rest.
