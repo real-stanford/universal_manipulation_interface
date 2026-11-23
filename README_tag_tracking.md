@@ -539,13 +539,12 @@ Recording name: task folder + file name (`station3/2026-11-21/task01/episode_000
 | File | Content |
 |---|---|
 | `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the MCAP's camera videos (the GoPro's H.265, already synchronized), moved into mp4 by stream copy: parameter sets in the header, tagged `hvc1` (QuickTime / Safari), faststart. Each file starts where the MCAP video starts: at the keyframe before the episode, up to 1 s |
-| `<rec>_meta.json` | per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); sync method, the sync event and `sync_frame_index` per file, clock corrections and uncertainty; gripper width and TCP conventions |
-| `<rec>_frames.csv` | one row per step: the frame index of the step in each file, time from the first step, per gripper (`right` = robot0, `left` = robot1) width in m (0 = fully closed), `pose_valid` and TCP pose (world frame, m, quaternion xyzw; empty where `pose_valid` is 0) |
-| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` per task folder, or `--mosaic_files`): head on top, right and left wrist below, each from its sync frame, stacked frame by frame; H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
+| `<rec>_meta.json` | `cameras`: per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); `sync`: method and the frame index of the sync event in each file |
+| `<rec>_right_gripper.csv`, `_left_gripper.csv` | gripper width per frame: `frame` (index in `<rec>_right.mp4` / `<rec>_left.mp4`, one row per frame), `width_m` (0 = fully closed; empty before the episode) |
+| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, right and left wrist below, each from its sync frame, stacked frame by frame; H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
 
-Sync: the sync event is the episode's first step, the same instant in all three files (each
-camera's frame nearest to it, within half a frame). Frame f of a file belongs to step
-`f - sync_frame_index`; `frames.csv` lists the frame of every step in every file.
+The sync event is the episode's first step: the same instant in all three files (each camera's frame
+nearest to it, within half a frame).
 
 ## Frame sync check
 

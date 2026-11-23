@@ -86,7 +86,7 @@ def test_export_mcap():
         assert r['sync_index'] == expected, r['sync_index']
         folder = out.joinpath(rec)
         assert sorted(os.listdir(folder)) == sorted(f"{rec}_{x}" for x in
-            ['frames.csv', 'head.mp4', 'left.mp4', 'meta.json', 'right.mp4'])
+            ['head.mp4', 'left.mp4', 'right.mp4', 'meta.json', 'right_gripper.csv', 'left_gripper.csv'])
         for role, cam in [('right', 0), ('left', 1), ('head', 2)]:
             p = probe(folder.joinpath(f"{rec}_{role}.mp4"))
             assert p['codec_tag_string'] == 'hvc1' and int(p['nb_read_frames']) == expected[role] + N, (role, p)
@@ -94,16 +94,18 @@ def test_export_mcap():
                 frames = [f.to_ndarray(format='gray') for f in c.decode(video=0)]
             assert read_number(frames[expected[role]]) == starts[cam], role      # the sync frame
             assert read_number(frames[expected[role] + 7]) == starts[cam] + 7, role
-        rows = list(csv.DictReader(open(folder.joinpath(f"{rec}_frames.csv"))))
-        assert len(rows) == N
-        assert (rows[0]['head_frame'], rows[0]['left_frame'], rows[0]['right_frame']) == ('17', '14', '15')
-        assert rows[5]['right_frame'] == '20' and rows[5]['time_s'].startswith('0.1666')
-        assert rows[10]['right_pose_valid'] == '0' and rows[10]['right_tcp_x'] == '' and rows[10]['right_gripper_width_m'] == '0.05000'
-        assert rows[10]['left_pose_valid'] == '1' and rows[10]['left_tcp_x'] == '1.10000' and rows[0]['left_gripper_width_m'] == '0.02000'
+        # gripper width per frame of its own video: one row per frame, empty before the sync frame
+        for side, width, n_lead in [('right', '0.05000', 15), ('left', '0.02000', 14)]:
+            rows = list(csv.reader(open(folder.joinpath(f"{rec}_{side}_gripper.csv"))))
+            assert rows[0] == ['frame', 'width_m'] and len(rows) == 1 + n_lead + N, (side, len(rows))
+            assert rows[1] == ['0', ''] and rows[n_lead] == [str(n_lead - 1), '']
+            assert rows[1 + n_lead] == [str(n_lead), width] and rows[-1] == [str(n_lead + N - 1), width]
         meta = json.load(open(folder.joinpath(f"{rec}_meta.json")))
-        assert meta['sync']['sync_frame_index'] == {'head': 17, 'left': 14, 'right': 15}
-        assert meta['sync']['clock_correction_ms'] == {'right': -3.2} and meta['sync']['sync_sigma_ms'] == {'right': 0.4}
-        assert meta['cameras']['head']['model'] == 'GoPro HERO12 Black' and meta['n_frames'] == N
+        assert sorted(meta) == ['cameras', 'files', 'gripper_width', 'sync'], sorted(meta)
+        assert meta['sync']['frame_index'] == {'head': 17, 'left': 14, 'right': 15}
+        assert meta['sync']['method'] == 'audio + motion'
+        assert meta['cameras'] == {'head': {'model': 'GoPro HERO12 Black', 'fx': '1200.0'}}
+        assert meta['files'] == {r: f"{rec}_{r}.mp4" for r in ('head', 'left', 'right')}
 
         mosaic = folder.joinpath(f"{rec}_mosaic.mp4")
         rhoda.mosaic(*((folder.joinpath(r['files'][k]), r['sync_index'][k]) for k in ('head', 'right', 'left')),

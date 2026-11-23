@@ -9,23 +9,19 @@ the three camera videos, per-frame data and metadata, in the order of the data P
         parameter sets in the file header, tagged hvc1 for QuickTime / Safari, faststart). Each file
         starts where the MCAP video starts: at the keyframe before the episode (up to 1 s).
     <rec>_meta.json
-        per camera: model, lens, field of view, resolution, frame rate, intrinsics (the MCAP's
-        camera{j} metadata, 07 with -c); sync: method, the sync event (the episode's first step) and
-        its frame index in each file, clock corrections and uncertainty (MCAP sync metadata);
-        gripper width and TCP conventions
-    <rec>_frames.csv
-        one row per episode step: the frame index of that step in each file, time from the first
-        step, per gripper its width (m, 0 = fully closed), pose_valid and TCP pose (world frame, m,
-        quaternion xyzw; empty where pose_valid is 0)
+        cameras: per camera model, lens, field of view, resolution, frame rate, intrinsics (the MCAP's
+        camera{j} metadata, 07 with -c); sync: method and the frame index of the sync event in each file
+    <rec>_right_gripper.csv, <rec>_left_gripper.csv
+        gripper width per frame: frame (index in <rec>_right.mp4 / <rec>_left.mp4, one row per frame),
+        width_m (0 = fully closed; empty before the episode)
     <rec>_mosaic.mp4 (optional, --mosaic N per task folder or --mosaic_files)
         review video: head on top, right and left wrist below, each from its sync frame on, so
         the three views start at the same instant; H.264 yuv420p 30 fps, any player. The only part
         that decodes and encodes video.
 
-Sync: the sync event is the episode's first step (the first robot0/gripper/state message). The sync
-frame index of a file is the number of frames of that camera before it; frame f of a file belongs
-to step f - sync_frame_index, all three within half a frame of the same instant (the MCAP's
-synchronized message times).
+Sync: the sync event is the episode's first step (the first robot0/gripper/state message); its frame
+index in a file is that camera's frame nearest to it (the MCAP's synchronized message times), all
+three within half a frame of the same instant.
 
 Input: an MCAP file, a folder or s3:// prefix with MCAP files below it, or a paths CSV of
 describe_mcaps.py --list_only. S3 files are downloaded one at a time into the output folder and
@@ -60,10 +56,9 @@ ROBOT_SIDES = ('right', 'left')   # UMI: robot0 right, robot1 left
 def read_mcap(path: str) -> dict:
     """
     Everything the delivery needs from one episode MCAP: metadata records, per camera topic its
-    (time ns, Annex B data) messages, per robot gripper width and pose messages by time.
+    (time ns, Annex B data) messages, per robot its gripper widths by time.
     """
-    out = {'metadata': {}, 'video': collections.defaultdict(list), 'width': collections.defaultdict(dict),
-        'pose': collections.defaultdict(dict)}
+    out = {'metadata': {}, 'video': collections.defaultdict(list), 'width': collections.defaultdict(dict)}
     with open(path, 'rb') as f:
         reader = make_reader(f)
         out['metadata'] = {m.name: dict(m.metadata) for m in reader.iter_metadata()}
@@ -74,9 +69,6 @@ def read_mcap(path: str) -> dict:
                     (message.log_time, base64.b64decode(json.loads(message.data)['data'])))
             elif topic.endswith('/gripper/state'):
                 out['width'][int(topic.split('/')[0][5:])][message.log_time] = json.loads(message.data)['width']
-            elif topic.endswith('/eef/pose'):
-                m = json.loads(message.data)
-                out['pose'][int(topic.split('/')[0][5:])][message.log_time] = m['pos'] + m['quat_xyzw']
     return out
 
 
@@ -153,50 +145,35 @@ def export_mcap(path: str, rec: str, out_dir: pathlib.Path) -> dict:
         files[role] = out.name
 
     roles_order = [r for r in ('head', 'left', 'right') if r in files]
-    with folder.joinpath(f"{rec}_frames.csv").open('w', newline='') as f:
-        w = csv.writer(f)
-        robots = sorted(data['width'])
-        header = ['step', 'time_s'] + [f'{r}_frame' for r in roles_order]
-        for g in robots:
-            side = ROBOT_SIDES[g] if g < len(ROBOT_SIDES) else f'robot{g}'
-            header += [f'{side}_gripper_width_m', f'{side}_pose_valid'] + \
-                [f'{side}_tcp_{a}' for a in ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw')]
-        w.writerow(header)
-        for i, t in enumerate(steps):
-            row = [i, f"{(t - steps[0]) / 1e9:.6f}"]
-            for r in roles_order:   # the frame of this step in each file (nearest frame time)
-                row.append(int(np.argmin(np.abs(frame_times[r] - t))))
-            for g in robots:
-                width = data['width'][g].get(t)
-                pose = data['pose'][g].get(t)
-                row += [f"{width:.5f}" if width is not None else '', int(pose is not None)]
-                row += ([f"{v:.5f}" for v in pose[:3]] + [f"{v:.6f}" for v in pose[3:]]) if pose is not None else [''] * 7
-            w.writerow(row)
 
-    cameras = {role_of(k): v for k, v in data['metadata'].items() if k.startswith('camera') and k[6:].isdigit()}
-    sync = data['metadata'].get('sync', {})
+    # gripper width per frame of that gripper's own video file (robot0 right wrist, robot1 left wrist);
+    # empty before the episode (lead-in frames)
+    for g, side in enumerate(ROBOT_SIDES):
+        if side not in files or g not in data['width']:
+            continue
+        widths = data['width'][g]
+        step_times = np.array(sorted(widths), dtype=np.int64)
+        with folder.joinpath(f"{rec}_{side}_gripper.csv").open('w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['frame', 'width_m'])
+            for frame, t in enumerate(frame_times[side]):
+                i = int(np.argmin(np.abs(step_times - t)))
+                value = widths[int(step_times[i])] if abs(int(step_times[i]) - int(t)) < 0.5 * dt_ns else None
+                w.writerow([frame, f"{value:.5f}" if value is not None else ''])
+
+    camera_keys = ('model', 'lens', 'fov_horizontal_deg', 'fov_vertical_deg', 'fov_diagonal_deg', 'resolution',
+        'frame_rate_hz', 'intrinsics_model', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4')
+    cameras = {role_of(k): {key: v[key] for key in camera_keys if key in v}
+        for k, v in data['metadata'].items() if k.startswith('camera') and k[6:].isdigit()}
     meta = {
-        'recording': rec,
-        'source_mcap': os.path.basename(path),
-        'n_frames': len(steps),
-        'duration_s': round((steps[-1] - steps[0]) / 1e9 + dt_ns / 1e9, 3),
-        'frame_rate_hz': fps,
         'files': {r: files[r] for r in roles_order},
-        'cameras': cameras or None,
+        'cameras': {r: cameras[r] for r in roles_order if r in cameras} or None,
         'sync': {
-            'method': sync.get('method'),
-            'event': "the episode's first step: the same instant in all three files (each camera's frame nearest "
-                     "to it, within half a frame); frame f of a file belongs to step f - sync_frame_index",
-            'sync_frame_index': {r: sync_index[r] for r in roles_order},
-            'clock_correction_ms': {role_of(k.split('_')[0]): float(v) for k, v in sync.items() if k.endswith('_offset_ms')},
-            'sync_sigma_ms': {role_of(k.split('_')[0]): float(v) for k, v in sync.items() if k.endswith('_sync_sigma_ms')},
+            'method': data['metadata'].get('sync', {}).get('method'),
+            'event': "the episode's first step, the same instant in all three files",
+            'frame_index': {r: sync_index[r] for r in roles_order},
         },
-        'gripper': {'width_unit': 'm', 'width_zero': 'fully closed',
-            'width_source': 'finger tag distance measured in the wrist camera, every frame',
-            'right': 'robot0', 'left': 'robot1'},
-        'tcp': {'frame': recording.get('world_frame', 'world'), 'position_unit': 'm', 'orientation': 'quaternion xyzw',
-            **{k: v for k, v in recording.items() if 'tcp_in_camera' in k}},
-        'frames_csv': f"{rec}_frames.csv",
+        'gripper_width': {side: f"{rec}_{side}_gripper.csv" for side in ROBOT_SIDES if side in files},
     }
     folder.joinpath(f"{rec}_meta.json").write_text(json.dumps(meta, indent=2))
     return {'recording': rec, 'folder': folder, 'files': files, 'sync_index': sync_index, 'n_frames': len(steps),
