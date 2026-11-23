@@ -29,9 +29,9 @@ frame, and the following frames at the following steps (checked).
 
 Input: an MCAP file, a folder or s3:// prefix with MCAP files below it, or a paths CSV of
 describe_mcaps.py --list_only. Output: a local folder or an s3:// prefix with the input's folder
-structure, one folder per recording (<input>/2026-11-21/task01/episode_000012.mcap ->
-<output>/2026-11-21/task01/<rec>/). Recording name: task folder + file name (station3/2026-11-21/task01/episode_000012.mcap ->
-station3_2026-11-21_task01_episode_000012). -j recordings at the same time (each job: download,
+structure, one folder per recording named as its MCAP file, the files in it named <rec>_head.mp4, ...
+with rec the task folder + file name (<input>/2026-11-21/task01/episode_000012.mcap ->
+<output>/2026-11-21/task01/episode_000012/2026-11-21_task01_episode_000012_head.mp4, ...). -j recordings at the same time (each job: download,
 export, mosaic, upload), the CPU cores split between them. S3 input is downloaded into -w and deleted
 after the export; with S3 output each recording folder is written in -w, uploaded (meta.json last,
 sizes checked) and deleted, so the disk holds only the recordings in progress. Recordings whose
@@ -126,9 +126,10 @@ def mosaic(head: tuple, right: tuple, left: tuple, n_frames: int, out_path: str,
         '-movflags', '+faststart', '-an', str(out_path)], check=True)
 
 
-def export_mcap(path: str, rec: str, out_dir: pathlib.Path, threads: int = 0) -> dict:
+def export_mcap(path: str, rec: str, out_dir: pathlib.Path, threads: int = 0, folder_name: str = None) -> dict:
     """
-    One recording folder from one episode MCAP. Returns the files, sync frame indices and frame count.
+    One recording folder (out_dir/<folder_name or rec>, files <rec>_head.mp4, ...) from one episode
+    MCAP. Returns the files, sync frame indices and frame count.
     """
     data = read_mcap(path)
     recording = data['metadata'].get('recording', {})
@@ -139,7 +140,7 @@ def export_mcap(path: str, rec: str, out_dir: pathlib.Path, threads: int = 0) ->
     assert steps, f"{path}: no robot0/gripper/state messages"
     assert data['video'], f"{path}: no camera video"
     dt_ns = 1e9 / fps if fps else float(np.median(np.diff(steps)))
-    folder = out_dir.joinpath(rec)
+    folder = out_dir.joinpath(folder_name or rec)
     folder.mkdir(parents=True, exist_ok=True)
     n = len(steps)
     exact = recording.get('video_start') == 'exact'
@@ -213,27 +214,32 @@ def s3_size(url: str):
 def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mosaic: bool, encoder: str,
         threads: int, overwrite: bool) -> str:
     """
-    One recording into <output>/<task>/<rec>/ (the input's folder structure): download (S3 input)
+    One recording into <output>/<task>/<episode>/ (the input's folder structure, the folder named as
+    the MCAP file), files <rec>_head.mp4, ... (rec: task folder + file name): download (S3 input)
     into workdir, export, mosaic, upload (S3 output; meta.json last, every file's size checked), then
     delete the download and, with S3 output, the local folder. Returns a one-line summary.
     """
     rec = recording_name(task, path)
+    episode = os.path.basename(path).rsplit('.', 1)[0]
     s3_out = output.startswith('s3://')
     rel = '/'.join(p for p in (task or '').split('/') if p and p != '.')
-    target = '/'.join(x for x in (output.rstrip('/'), rel, rec) if x)      # the recording's folder
+    label = '/'.join(x for x in (rel, episode) if x)
+    target = '/'.join(x for x in (output.rstrip('/'), rel, episode) if x)    # the recording's folder
     meta = f"{target}/{rec}_meta.json"
     if not overwrite and (s3_size(meta) is not None if s3_out else os.path.isfile(meta)):
-        return f"{rec}: in the output, skipped"
-    out_dir = workdir if s3_out else pathlib.Path(target).parent
+        return f"{label}: in the output, skipped"
+    # S3 output: written in workdir/<task>/<episode> (episodes of the same name in other tasks run in parallel)
+    out_dir = workdir.joinpath(rel) if s3_out else pathlib.Path(target).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
     local = str(workdir.joinpath(f".{rec}.mcap")) if path.startswith('s3://') else path
-    folder = out_dir.joinpath(rec)
+    folder = out_dir.joinpath(episode)
     try:
         if local != path:
             subprocess.run(['aws', 's3', 'cp', path, local, '--only-show-errors'], check=True)
-        r = export_mcap(local, rec, out_dir, threads)
+        r = export_mcap(local, rec, out_dir, threads, folder_name=episode)
         if local != path:
             os.remove(local)                # the MCAP is not needed for the mosaic
-        msg = f"{rec}: {r['n_frames']} frames in every file, start re-encoded: " + \
+        msg = f"{label}: {r['n_frames']} frames in every file, start re-encoded: " + \
             (', '.join(k for k, v in sorted(r['reencoded'].items()) if v) or 'none')
         if make_mosaic and all(k in r['files'] for k in ('head', 'right', 'left')):
             mosaic(*((folder.joinpath(r['files'][k]), r['sync_index'][k]) for k in ('head', 'right', 'left')),
@@ -311,7 +317,7 @@ def main(source, output, workdir, jobs, n_mosaic, mosaic_files, mosaic_encoder, 
                 done += 1
             except Exception as e:
                 failed += 1
-                print(f"{n}/{len(files)} {recording_name(task, path)}: FAILED {type(e).__name__}: {e}", flush=True)
+                print(f"{n}/{len(files)} {task}/{os.path.basename(path)}: FAILED {type(e).__name__}: {e}", flush=True)
     print(f"done: {done} ok, {failed} failed (rerun to retry; recordings in the output are skipped)")
 
 # %%
