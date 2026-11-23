@@ -160,21 +160,32 @@ def main(root, csv_path, paths_only, jobs):
         per_task.setdefault(task or '.', list()).append((path, size, info))
 
     hms = lambda s: f"{int(s // 3600)}:{int(s % 3600 // 60):02d}:{int(s % 60):02d}"
-    header = f"{'task':<36} {'episodes':>8} {'good':>6} {'good duration':>14} {'with gaps':>10} {'gaps duration':>14}"
+    header = f"{'task':<36} {'episodes':>8} {'good':>6} {'good duration':>14} {'with gaps':>10} {'gaps duration':>14} " \
+        f"{'pose in gap eps':>15} {'pose overall':>12}"
+    # share of gripper steps with a pose (both grippers counted): in the episodes with gaps, and overall
+    pose_share = lambda infos: 1 - sum(sum(i['missing_steps']) for i in infos) / max(
+        sum(i['steps'] * max(len(i['missing_steps']), 1) for i in infos), 1)
     print('\n' + header + '\n' + '-' * len(header))
     totals = collections.Counter()
+    all_infos = list()
     for task, rows in per_task.items():
         good = [i for _, _, i in rows if i['good']]
         gaps = [i for _, _, i in rows if not i['good']]
         t = {'episodes': len(rows), 'good': len(good), 'good_s': sum(i['duration_s'] for i in good),
             'gaps': len(gaps), 'gaps_s': sum(i['duration_s'] for i in gaps)}
         totals.update(t)
-        print(f"{task:<36} {t['episodes']:>8} {t['good']:>6} {hms(t['good_s']):>14} {t['gaps']:>10} {hms(t['gaps_s']):>14}")
+        all_infos.extend(i for _, _, i in rows)
+        gap_share = f"{pose_share(gaps) * 100:.1f}%" if gaps else '-'
+        print(f"{task:<36} {t['episodes']:>8} {t['good']:>6} {hms(t['good_s']):>14} {t['gaps']:>10} {hms(t['gaps_s']):>14} "
+            f"{gap_share:>15} {pose_share([i for _, _, i in rows]) * 100:>11.1f}%")
     print('-' * len(header))
+    all_gaps = [i for i in all_infos if not i['good']]
     print(f"{'total':<36} {totals['episodes']:>8} {totals['good']:>6} {hms(totals['good_s']):>14} "
-        f"{totals['gaps']:>10} {hms(totals['gaps_s']):>14}")
+        f"{totals['gaps']:>10} {hms(totals['gaps_s']):>14} "
+        f"{(f'{pose_share(all_gaps) * 100:.1f}%' if all_gaps else '-'):>15} {pose_share(all_infos) * 100:>11.1f}%")
     print(f"\ngood: a pose for every step of both grippers; duration: episode steps / video fps "
-        f"(good {totals['good_s'] / 60:.1f} min, {totals['good_s'] / 3600:.2f} h)")
+        f"(good {totals['good_s'] / 60:.1f} min, {totals['good_s'] / 3600:.2f} h); pose: share of the steps "
+        f"of both grippers with a pose (episodes with gaps; all episodes)")
 
     if csv_path:
         with open(os.path.expanduser(csv_path), 'w', newline='') as f:
