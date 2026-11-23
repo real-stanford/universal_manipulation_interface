@@ -82,7 +82,7 @@ def test_export_mcap():
         path, starts = make_mcap(tmp)
         out = pathlib.Path(tmp, 'out')
         rec = rhoda.recording_name('station3/2026-11-21/task01', path)
-        assert rec == 'station3_2026-11-21_task01_episode_000012'
+        assert rec == '2026-11-21_task01_episode_000012'      # no station in the file names
         r = rhoda.export_mcap(path, rec, out)
         assert r['sync_index'] == {'right': 0, 'left': 0, 'head': 0}, r['sync_index']
         folder = out.joinpath(rec)
@@ -149,10 +149,10 @@ def test_jobs_and_s3():
         assert result.exit_code == 0 and 'done: 2 ok, 0 failed' in result.output, result.output
         out = out.joinpath('station1', 'task02')      # the input's folder structure, a folder per episode
         assert sorted(os.listdir(out)) == ['episode_000001', 'episode_000002'], os.listdir(out)
-        assert sorted(os.listdir(out.joinpath('episode_000002'))) == sorted(f"station1_task02_episode_000002_{x}" for x in
+        assert sorted(os.listdir(out.joinpath('episode_000002'))) == sorted(f"task02_episode_000002_{x}" for x in
             ['head.mp4', 'left.mp4', 'right.mp4', 'meta.json', 'right_gripper.csv', 'left_gripper.csv', 'mosaic.mp4'])
         assert len(os.listdir(out.joinpath('episode_000001'))) == 6
-        assert int(probe(out.joinpath('episode_000002', 'station1_task02_episode_000002_mosaic.mp4'))['nb_read_frames']) == N
+        assert int(probe(out.joinpath('episode_000002', 'task02_episode_000002_mosaic.mp4'))['nb_read_frames']) == N
         out = pathlib.Path(tmp, 'rhoda')
         result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2'])
         assert result.output.count('in the output, skipped') == 2, result.output
@@ -168,8 +168,8 @@ def test_jobs_and_s3():
         result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'many')), '-o', str(many), '-j', '4', '--mosaic', '2'])
         mosaics = sorted(p.name[:-len('_mosaic.mp4')] for p in many.rglob('*_mosaic.mp4'))
         assert sorted(os.listdir(many.joinpath('station1'))) == ['task03', 'task04']
-        assert result.exit_code == 0 and mosaics == ['station1_task03_episode_000000', 'station1_task03_episode_000002',
-            'station1_task04_episode_000000', 'station1_task04_episode_000004'], (mosaics, result.output)
+        assert result.exit_code == 0 and mosaics == ['task03_episode_000000', 'task03_episode_000002',
+            'task04_episode_000000', 'task04_episode_000004'], (mosaics, result.output)
 
         # S3 in and out (aws faked): downloaded into the workdir, uploaded with meta.json last, all deleted
         bucket, uploads = dict(), list()
@@ -189,6 +189,15 @@ def test_jobs_and_s3():
                 return subprocess.CompletedProcess(cmd, 0, '', '')
             return real_run(cmd, *args, **kwargs)
         bucket['s3://in/station1/task02/episode_000001.mcap'] = path
+        # the station / date / task folders from the stationN folder on, whatever folder is the input
+        assert rhoda.task_folder('s3://b/umi_data/industrial_data/station2/2026-11-22/task01/episode_000004.mcap', '.') \
+            == 'station2/2026-11-22/task01'
+        assert rhoda.task_folder('/data/station3/task01/dataset_mcap/episode_000001.mcap', 'task01/dataset_mcap') \
+            == 'station3/task01'
+        assert rhoda.task_folder('/data/x/task01/episode_000001.mcap', 'task01') == 'task01'
+        result = CliRunner().invoke(rhoda.main, [str(src), '-o', str(pathlib.Path(tmp, 'from_task'))])   # input: the task folder
+        assert result.exit_code == 0 and pathlib.Path(tmp, 'from_task', 'station1', 'task02', 'episode_000001',
+            'task02_episode_000001_head.mp4').is_file(), result.output
         rhoda.subprocess.run = fake_run
         rhoda.s3_size = lambda url: os.path.getsize(bucket[url]) if url in bucket else None
         try:
@@ -199,7 +208,7 @@ def test_jobs_and_s3():
         finally:
             rhoda.subprocess.run = real_run
         assert 'mosaic, uploaded' in msg, msg
-        rec = 'station1_task02_episode_000001'
+        rec = 'task02_episode_000001'
         assert len(uploads) == 7 and uploads[-1] == f's3://out/rhoda/station1/task02/episode_000001/{rec}_meta.json', uploads
         assert sorted(os.listdir(work)) == ['station1'] and not list(work.rglob('*.*')), list(work.rglob('*'))
         assert 'skipped' in rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02',

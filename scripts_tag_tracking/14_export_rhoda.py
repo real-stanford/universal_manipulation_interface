@@ -28,10 +28,11 @@ camera's MCAP video the frame nearest to it (the MCAP's synchronized message tim
 frame, and the following frames at the following steps (checked).
 
 Input: an MCAP file, a folder or s3:// prefix with MCAP files below it, or a paths CSV of
-describe_mcaps.py --list_only. Output: a local folder or an s3:// prefix with the input's folder
-structure, one folder per recording named as its MCAP file, the files in it named <rec>_head.mp4, ...
-with rec the task folder + file name (<input>/2026-11-21/task01/episode_000012.mcap ->
-<output>/2026-11-21/task01/episode_000012/2026-11-21_task01_episode_000012_head.mp4, ...). -j recordings at the same time (each job: download,
+describe_mcaps.py --list_only. Output: a local folder or an s3:// prefix with the station / date /
+task folders of the input (from the stationN folder in its path on, whatever folder is the input),
+one folder per recording named as its MCAP file, the files in it named <rec>_head.mp4, ... with rec
+the date / task + file name, no station (.../station2/2026-11-22/task01/episode_000004.mcap ->
+<output>/station2/2026-11-22/task01/episode_000004/2026-11-22_task01_episode_000004_head.mp4). -j recordings at the same time (each job: download,
 export, mosaic, upload), the CPU cores split between them. S3 input is downloaded into -w and deleted
 after the export; with S3 output each recording folder is written in -w, uploaded (meta.json last,
 sizes checked) and deleted, so the disk holds only the recordings in progress. Recordings whose
@@ -55,6 +56,7 @@ import concurrent.futures
 import csv
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 from fractions import Fraction
@@ -198,9 +200,25 @@ def export_mcap(path: str, rec: str, out_dir: pathlib.Path, threads: int = 0, fo
         'fps': fps}
 
 
+def task_folder(path: str, task: str) -> str:
+    """
+    The recording's folder path in the output: from the station folder (stationN) of its path on, so
+    the output has station / date / task whether the input is a station, a date or a task folder
+    (s3://b/umi_data/industrial_data/station2/2026-11-22/task01/episode_000004.mcap ->
+    station2/2026-11-22/task01); without a station folder in the path: task (relative to the input).
+    """
+    parts = [p for p in os.path.dirname(path.split('://', 1)[-1]).split('/') if p and p != 'dataset_mcap']
+    station = next((k for k, p in enumerate(parts) if re.fullmatch(r'station\d+', p)), None)
+    return '/'.join(parts[station:]) if station is not None else task
+
+
 def recording_name(task: str, path: str) -> str:
+    """
+    File name prefix of a recording: date / task folders + file name, without the station folder
+    (station2/2026-11-22/task01, episode_000004.mcap -> 2026-11-22_task01_episode_000004).
+    """
     stem = os.path.basename(path).rsplit('.', 1)[0]
-    parts = [p for p in (task or '').split('/') if p and p not in ('.', 'dataset_mcap')]
+    parts = [p for p in (task or '').split('/') if p and p not in ('.', 'dataset_mcap') and not re.fullmatch(r'station\d+', p)]
     return '_'.join(parts + [stem])
 
 
@@ -289,6 +307,7 @@ def main(source, output, workdir, jobs, n_mosaic, mosaic_files, mosaic_encoder, 
     assert workdir or not output.startswith('s3://'), "S3 output: give a local --workdir"
     workdir = pathlib.Path(os.path.expanduser(workdir or output)).absolute()
     workdir.mkdir(parents=True, exist_ok=True)
+    files = [(path, size, task_folder(path, task)) for path, size, task in files]
     by_task = collections.defaultdict(list)
     for path, size, task in files:
         by_task[task or '.'].append(path)
