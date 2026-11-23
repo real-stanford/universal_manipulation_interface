@@ -532,7 +532,8 @@ same frame count, so frame `i` is the same instant in every file (PRD U2).
 python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <folder or s3://> [-w <workdir>] [-j 8] [--mosaic 3]
 ```
 
-`-j`: recordings at the same time, each job download, export, mosaic and upload of one recording,
+The output has the input's folder structure: `<input>/2026-11-21/task01/episode_000012.mcap` ->
+`<output>/2026-11-21/task01/<rec>/`. `-j`: recordings at the same time, each job download, export, mosaic and upload of one recording,
 the CPU cores split between the jobs. Each job holds its MCAP in memory (about 1-2x the file size)
 and needs about twice its size on disk while it runs. With `-o s3://...` each recording folder is
 written in `-w`, uploaded (meta.json last, sizes checked) and deleted; S3 input is downloaded into `-w`

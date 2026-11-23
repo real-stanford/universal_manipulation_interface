@@ -28,8 +28,9 @@ camera's MCAP video the frame nearest to it (the MCAP's synchronized message tim
 frame, and the following frames at the following steps (checked).
 
 Input: an MCAP file, a folder or s3:// prefix with MCAP files below it, or a paths CSV of
-describe_mcaps.py --list_only. Output: a local folder or an s3:// prefix, one folder per recording.
-Recording name: task folder + file name (station3/2026-11-21/task01/episode_000012.mcap ->
+describe_mcaps.py --list_only. Output: a local folder or an s3:// prefix with the input's folder
+structure, one folder per recording (<input>/2026-11-21/task01/episode_000012.mcap ->
+<output>/2026-11-21/task01/<rec>/). Recording name: task folder + file name (station3/2026-11-21/task01/episode_000012.mcap ->
 station3_2026-11-21_task01_episode_000012). -j recordings at the same time (each job: download,
 export, mosaic, upload), the CPU cores split between them. S3 input is downloaded into -w and deleted
 after the export; with S3 output each recording folder is written in -w, uploaded (meta.json last,
@@ -212,16 +213,18 @@ def s3_size(url: str):
 def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mosaic: bool, encoder: str,
         threads: int, overwrite: bool) -> str:
     """
-    One recording: download (S3 input) into workdir, export, mosaic, upload (S3 output; meta.json
-    last, every file's size checked), then delete the download and, with S3 output, the local folder.
-    Local output: the folder stays in output. Returns a one-line summary.
+    One recording into <output>/<task>/<rec>/ (the input's folder structure): download (S3 input)
+    into workdir, export, mosaic, upload (S3 output; meta.json last, every file's size checked), then
+    delete the download and, with S3 output, the local folder. Returns a one-line summary.
     """
     rec = recording_name(task, path)
     s3_out = output.startswith('s3://')
-    meta = f"{output.rstrip('/')}/{rec}/{rec}_meta.json"
+    rel = '/'.join(p for p in (task or '').split('/') if p and p != '.')
+    target = '/'.join(x for x in (output.rstrip('/'), rel, rec) if x)      # the recording's folder
+    meta = f"{target}/{rec}_meta.json"
     if not overwrite and (s3_size(meta) is not None if s3_out else os.path.isfile(meta)):
         return f"{rec}: in the output, skipped"
-    out_dir = workdir if s3_out else pathlib.Path(output)
+    out_dir = workdir if s3_out else pathlib.Path(target).parent
     local = str(workdir.joinpath(f".{rec}.mcap")) if path.startswith('s3://') else path
     folder = out_dir.joinpath(rec)
     try:
@@ -240,7 +243,7 @@ def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mo
             names = sorted(p.name for p in folder.iterdir())
             names = [n for n in names if not n.endswith('_meta.json')] + [n for n in names if n.endswith('_meta.json')]
             for name in names:              # meta.json last: a recording with meta.json on S3 is complete
-                url = f"{output.rstrip('/')}/{rec}/{name}"
+                url = f"{target}/{name}"
                 subprocess.run(['aws', 's3', 'cp', str(folder.joinpath(name)), url, '--only-show-errors'], check=True)
                 assert s3_size(url) == folder.joinpath(name).stat().st_size, f"{url}: uploaded size differs"
             msg += ', uploaded'
@@ -255,7 +258,7 @@ def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mo
 # %%
 @click.command()
 @click.argument('source')
-@click.option('-o', '--output', required=True, help='Local folder or s3:// prefix, one folder per recording')
+@click.option('-o', '--output', required=True, help='Local folder or s3:// prefix: the input folder structure, one folder per recording')
 @click.option('-w', '--workdir', default=None,
     help='Local folder for downloads and, with S3 output, the recordings until uploaded (deleted after)')
 @click.option('-j', '--jobs', type=int, default=1, help='Recordings exported at the same time')
