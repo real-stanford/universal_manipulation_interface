@@ -3,7 +3,7 @@
 # Station2 from 2026-11-22 on (cube retagged: 2-5 and 8-11; before, both cubes carried 8-11).
 # Filled in by hand: cameras / head_imu / gripper_imu (station2_head / _left / _right imported 2026-11-23;
 # head and right camera-IMU translation = HERO12 mean, their estimates 4.9 / 2.4 mm), tag 11 on the 8-10
-# cube (never seen by the head in task01). Setup calibration: run calibrate_setup.py on task01 first.
+# cube (never seen by the head in task01).
 #
 # cameras: head C3501326496309, right C3501326499922, left C3501326497208
 # right camera C3501326499922, GX010325.MP4: finger candidates 0 (100%, x 0.78), 1 (100%, x 0.24), 6 (93%, x 0.09)
@@ -45,7 +45,9 @@ aruco_config: aruco_config.yaml
 corner_noise: corner_noise.json
 gripper_config: gripper_config_station2.yaml
 head_camera: C3501326496309
-# setup_calibration: setup_station2
+# setup calibration from station2 task01 2026-11-22 (calibrate_setup.py, 2026-11-23): all 9 environment
+# tags, cube 2-5 / 8-11 (11 never seen), cube -> wrist spread 2.8 / 4.0 mm
+setup_calibration: setup_station2
 head_imu:
   cam_imu_calibration: openicc/station2_head/cam_imu/cam_imu_calib_result_GX019309.json
   noise_setting: gopro12_wide_fisheye_setting_720_C3501326496309.yaml
