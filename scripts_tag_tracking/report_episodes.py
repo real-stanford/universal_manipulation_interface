@@ -11,6 +11,7 @@ episode's steps, without the video lead-in). MCAP files without robot<i>_pose_mi
 
 python scripts_tag_tracking/report_episodes.py s3://my-bucket/umi_data/industrial_data [--csv report.csv]
 python scripts_tag_tracking/report_episodes.py ~/umi_data/station1/industrial_data
+python scripts_tag_tracking/report_episodes.py s3://my-bucket/umi_data/industrial_data --csv mcaps.csv --paths_only
 """
 # %%
 import sys
@@ -131,10 +132,25 @@ def episode_info(path: str, size: int) -> dict:
 @click.command()
 @click.argument('root')
 @click.option('--csv', 'csv_path', default=None, help='Also write one row per episode here')
+@click.option('--paths_only', is_flag=True, default=False,
+    help='Only list the MCAP files (task, path, size) into --csv, without reading them')
 @click.option('-j', '--jobs', type=int, default=16, help='Files read in parallel')
-def main(root, csv_path, jobs):
+def main(root, csv_path, paths_only, jobs):
     files = list_mcaps(root)
     assert files, f"no .mcap files under {root}"
+    if paths_only:
+        assert csv_path, "--paths_only writes the list to --csv"
+        rows = sorted((task or '.', path, round(size / 1e6, 1)) for path, size, task in files)
+        pathlib.Path(os.path.expanduser(csv_path)).parent.mkdir(parents=True, exist_ok=True)
+        with open(os.path.expanduser(csv_path), 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['task', 'path', 'size_mb'])
+            w.writerows(rows)
+        per_task = collections.Counter(task for task, _, _ in rows)
+        for task, n in sorted(per_task.items()):
+            print(f"{task:<40} {n:>5} MCAP files")
+        print(f"{len(rows)} MCAP files, {sum(r[2] for r in rows) / 1e3:.1f} GB; saved {csv_path}")
+        return
     print(f"{len(files)} MCAP files under {root}", flush=True)
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
         infos = list(pool.map(lambda f: episode_info(f[0], f[1]), files))
