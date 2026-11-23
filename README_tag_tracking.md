@@ -521,6 +521,25 @@ annotations, or with `--no_annotations`: no `annotations.json`; task text, famil
 declared in the delivery yaml (`outcome` `unknown` where not declared). `validation_status` is
 `not_run` (no quality checks).
 
+### 7. Rhoda delivery (three files per recording)
+
+The data PRD's UMI delivery: one folder per recording (episode) with the three camera videos, the
+per-frame data and the metadata. The videos are not re-encoded.
+
+```
+python scripts_tag_tracking/14_export_rhoda.py -i <session> -c <config> -o <out> --name <station>_<date>_<task> [--mosaic 3]
+```
+
+| File | Content |
+|---|---|
+| `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the cameras' original H.265, copied from the keyframe at or before the episode's first step to its last step (GoPro: one keyframe per second, so up to 1 s before the episode); tagged `hvc1` for QuickTime / Safari |
+| `<rec>_frames.csv` | one row per step: the frame index of the step in each file, time from the first step, per gripper (`right` = robot0, `left` = robot1) width in m (0 = fully closed), `pose_valid` and TCP pose in the world frame (m, quaternion xyzw), empty where `pose_valid` is 0 |
+| `<rec>_meta.json` | per camera model, lens, field of view, resolution, frame rate, Kannala-Brandt intrinsics and their source; sync method, sync event and `sync_frame_index` per file, wrist clock corrections and uncertainty; gripper width and TCP conventions |
+| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` episodes evenly over the session, or `--mosaic_episodes`): head on top, right and left wrist below, from the sync frames on, H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
+
+The sync event is the episode's first step, the same instant in all three files (each camera's frame
+nearest to it, within half a frame): frame f of a file belongs to step `f - sync_frame_index`.
+
 ## Frame sync check
 
 `check_frame_sync.py` checks the exported frame timestamps against the cameras' own images,
