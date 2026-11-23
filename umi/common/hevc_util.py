@@ -27,7 +27,7 @@ def is_keyframe(data: bytes) -> bool:
     return bool(nal_types(data) & IRAP_AND_VPS)
 
 
-def cut_from(frames, start_frame: int, rate, crf: int = 16):
+def cut_from(frames, start_frame: int, rate, crf: int = 16, threads: int = 0):
     """
     (frame index, Annex B data) of the frames from start_frame on, exactly. frames: (frame index,
     Annex B data) in order, starting at a keyframe at or before start_frame, no B-frames. The frames
@@ -35,9 +35,11 @@ def cut_from(frames, start_frame: int, rate, crf: int = 16):
     H.265 (libx265, first frame a keyframe, no B-frames, parameter sets in the stream, full range
     like the GoPro stream); from the next keyframe on the original data is passed through. If
     start_frame is a keyframe nothing is re-encoded. At GoPro's one keyframe per second at most one
-    second is re-encoded.
+    second is re-encoded. threads: CPU threads for decoder and encoder (0: all cores).
     """
     decoder = av.CodecContext.create('hevc', 'r')
+    if threads:
+        decoder.thread_count = threads
     state = {'encoder': None, 'first': None, 'sent': 0, 'decoded': 0, 'encoded': 0}
     pending = list()
 
@@ -48,7 +50,8 @@ def cut_from(frames, start_frame: int, rate, crf: int = 16):
             encoder.pix_fmt = frame.format.name
             encoder.time_base = 1 / Fraction(rate)
             encoder.options = {'preset': 'fast', 'crf': str(crf), 'x265-params':
-                'bframes=0:repeat-headers=1:aud=1:open-gop=0:keyint=600:range=full:log-level=error'}
+                'bframes=0:repeat-headers=1:aud=1:open-gop=0:keyint=600:range=full:log-level=error'
+                + (f':pools={threads}:frame-threads={min(threads, 4)}' if threads else '')}
             state['encoder'] = encoder
         frame.pts = state['encoded']
         state['encoded'] += 1
@@ -88,7 +91,7 @@ def cut_from(frames, start_frame: int, rate, crf: int = 16):
         yield from flush()
 
 
-def cut_to_steps(times, frames: list, steps, rate, crf: int = 16):
+def cut_to_steps(times, frames: list, steps, rate, crf: int = 16, threads: int = 0):
     """
     One camera's episode video from an MCAP: times (ns) and Annex B data of its video messages (in
     order, from a keyframe), steps (ns) the episode's step times. Returns (start index in the
@@ -102,6 +105,6 @@ def cut_to_steps(times, frames: list, steps, rate, crf: int = 16):
     start = int(np.argmin(np.abs(times - steps[0])))
     assert len(times) >= start + n and np.all(np.abs(times[start:start + n] - steps) < 0.5 * dt_ns), \
         f"{len(times) - start} frames from the episode start, not one per step for {n} steps"
-    out = list(cut_from(((i, frames[i]) for i in range(start + n)), start, rate, crf))
+    out = list(cut_from(((i, frames[i]) for i in range(start + n)), start, rate, crf, threads))
     assert len(out) == n, f"{len(out)} frames after the cut, {n} steps"
     return start, not is_keyframe(frames[start]), out

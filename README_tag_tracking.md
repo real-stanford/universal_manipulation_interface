@@ -529,8 +529,15 @@ camera videos, the metadata and the per-frame data. All three files cover exactl
 same frame count, so frame `i` is the same instant in every file (PRD U2).
 
 ```
-python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <out> [--mosaic 3]
+python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <folder or s3://> [-w <workdir>] [-j 8] [--mosaic 3]
 ```
+
+`-j`: recordings at the same time, each job download, export, mosaic and upload of one recording,
+the CPU cores split between the jobs. Each job holds its MCAP in memory (about 1-2x the file size)
+and needs about twice its size on disk while it runs. With `-o s3://...` each recording folder is
+written in `-w`, uploaded (meta.json last, sizes checked) and deleted; S3 input is downloaded into `-w`
+and deleted after the export, so the disk holds only the recordings in progress. Recordings whose
+`meta.json` is in the output are skipped (rerun to continue).
 
 MCAPs exported without `--exact_start` (all of `process_station.py --mcap` so far) start each camera
 at the keyframe before the episode; the export re-encodes per camera only the frames from the episode
@@ -540,9 +547,8 @@ No corrected MCAP is written. (To store corrected MCAPs themselves, e.g. for ano
 `recording` `video_start` becomes `exact`, `sync` `camera{j}_sync_frame` moves to `source`.)
 
 Input: one MCAP, a folder or `s3://` prefix with MCAPs below it, or the paths CSV of
-`describe_mcaps.py --list_only`. S3 files are downloaded one at a time and deleted after.
-Recording name: task folder + file name (`station3/2026-11-21/task01/episode_000012.mcap` ->
-`station3_2026-11-21_task01_episode_000012`). Recordings already exported are skipped.
+`describe_mcaps.py --list_only`. Recording name: task folder + file name
+(`station3/2026-11-21/task01/episode_000012.mcap` -> `station3_2026-11-21_task01_episode_000012`).
 
 | File | Content |
 |---|---|

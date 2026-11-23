@@ -133,6 +133,63 @@ def test_export_mcap():
             for i in [0, 1, 14, 15, 16, N - 1]:
                 assert read_number(frames[i]) == starts[cam] + i, (role, i)
 
+def test_jobs_and_s3():
+    import shutil
+    from click.testing import CliRunner
+    with tempfile.TemporaryDirectory() as tmp:
+        src = pathlib.Path(tmp, 'mcaps', 'station1', 'task02')
+        src.mkdir(parents=True)
+        path, starts = make_mcap(tmp)
+        shutil.copy(path, src.joinpath('episode_000001.mcap'))
+        shutil.copy(path, src.joinpath('episode_000002.mcap'))
+        # two recordings in parallel, local output, a mosaic for one
+        out = pathlib.Path(tmp, 'rhoda')
+        result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2',
+            '--mosaic_files', 'episode_000002.mcap'])
+        assert result.exit_code == 0 and 'done: 2 ok, 0 failed' in result.output, result.output
+        recs = sorted(os.listdir(out))
+        assert recs == ['station1_task02_episode_000001', 'station1_task02_episode_000002'], recs
+        assert len(os.listdir(out.joinpath(recs[0]))) == 6 and len(os.listdir(out.joinpath(recs[1]))) == 7
+        assert int(probe(out.joinpath(recs[1], f"{recs[1]}_mosaic.mp4"))['nb_read_frames']) == N
+        result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2'])
+        assert result.output.count('in the output, skipped') == 2, result.output
+
+        # S3 in and out (aws faked): downloaded into the workdir, uploaded with meta.json last, all deleted
+        bucket, uploads = dict(), list()
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[:3] == ['aws', 's3', 'cp']:
+                a, b = cmd[3], cmd[4]
+                if a.startswith('s3://'):
+                    shutil.copy(bucket[a], b)
+                else:
+                    keep = pathlib.Path(tmp, 'bucket', b[5:])
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(a, keep)
+                    bucket[b] = str(keep)
+                    uploads.append(b)
+                return subprocess.CompletedProcess(cmd, 0, '', '')
+            return real_run(cmd, *args, **kwargs)
+        bucket['s3://in/station1/task02/episode_000001.mcap'] = path
+        rhoda.subprocess.run = fake_run
+        rhoda.s3_size = lambda url: os.path.getsize(bucket[url]) if url in bucket else None
+        try:
+            work = pathlib.Path(tmp, 'work')
+            work.mkdir()
+            msg = rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02', 's3://out/rhoda',
+                work, True, 'libx264', 2, False)
+        finally:
+            rhoda.subprocess.run = real_run
+        assert 'mosaic, uploaded' in msg, msg
+        rec = 'station1_task02_episode_000001'
+        assert len(uploads) == 7 and uploads[-1] == f's3://out/rhoda/{rec}/{rec}_meta.json', uploads
+        assert os.listdir(work) == [], os.listdir(work)
+        assert 'skipped' in rhoda.export_one('s3://in/station1/task02/episode_000001.mcap', 'station1/task02',
+            's3://out/rhoda', work, True, 'libx264', 2, False)
+
+
 if __name__ == '__main__':
     test_export_mcap()
+    test_jobs_and_s3()
     print('all passed')
