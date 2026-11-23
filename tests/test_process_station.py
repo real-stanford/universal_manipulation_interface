@@ -58,7 +58,7 @@ def test_station_job():
             root.joinpath(t, 'raw_videos').mkdir(parents=True)
         root.joinpath('notes').mkdir()
         config = pathlib.Path(tmp, 'config.yaml')
-        config.write_text('x: 1\n')
+        config.write_text('setup_calibration: setup_x\n')
         job = process_station.station_job(str(root), str(config), None, None, True, None, False)
         assert job['name'] == 'station3' and job['names'] == ['task01', 'task02'] and not job['on_s3']
         assert process_station.station_job(str(root), str(config), None, ['task02'], True, None, False)['names'] == ['task02']

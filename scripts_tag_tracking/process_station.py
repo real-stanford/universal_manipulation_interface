@@ -148,6 +148,10 @@ def station_job(sessions: str, config: str, workdir, tasks, mcap: bool, upload, 
     """
     config = os.path.abspath(os.path.expanduser(config))
     assert os.path.isfile(config), f"config not found: {config}"
+    # without a setup calibration every session would calibrate its own bodies and TCP (slow, one
+    # process, and different per session): build it once first (README step 2)
+    assert yaml.safe_load(open(config)).get('setup_calibration'), \
+        f"{config}: no setup_calibration; build it once on one session (calibrate_setup.py, README step 2)"
     on_s3 = sessions.startswith('s3://')
     sessions = sessions.rstrip('/')
     if on_s3:
