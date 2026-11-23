@@ -119,8 +119,8 @@ def test_export_mcap():
         with av.open(str(mosaic)) as c:
             first = next(c.decode(video=0)).to_ndarray(format='gray')
         assert read_number(cv2.resize(first[:240, :320], (320, 240))) == starts[2]          # head at its sync frame
-        assert read_number(cv2.resize(first[240:, :160], (320, 240))) == starts[0]          # right wrist
-        assert read_number(cv2.resize(first[240:, 160:], (320, 240))) == starts[1]          # left wrist
+        assert read_number(cv2.resize(first[240:, :160], (320, 240))) == starts[1]          # left wrist, bottom left
+        assert read_number(cv2.resize(first[240:, 160:], (320, 240))) == starts[0]          # right wrist, bottom right
 
         # without --exact_start (keyframe start, lead-in per camera): cut here, same result
         path, _ = make_mcap(tmp, exact=False)

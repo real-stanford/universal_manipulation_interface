@@ -581,7 +581,7 @@ Input: one MCAP, a folder or `s3://` prefix with MCAPs below it, or the paths CS
 | `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the MCAP's camera videos, frame 0 = the episode's first step, one frame per step; the GoPro's H.265 stream-copied, faststart, except the re-encoded start (at most 1 s). Tagged `hev1` when the start is re-encoded (two encodings keep their parameter sets in the stream), else `hvc1` |
 | `<rec>_meta.json` | `cameras`: per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); `sync`: method and the frame index of the sync event in each file (0: every file starts at it) |
 | `<rec>_right_gripper.csv`, `_left_gripper.csv` | gripper width per frame: `frame` (index in every file of the recording), `width_m` (0 = fully closed) |
-| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, right and left wrist below, frame by frame at the cameras' frame rate (every frame); H.264 yuv420p; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
+| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, left wrist bottom left, right wrist bottom right, frame by frame at the cameras' frame rate (every frame); H.264 yuv420p; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
 
 ## Frame sync check
 

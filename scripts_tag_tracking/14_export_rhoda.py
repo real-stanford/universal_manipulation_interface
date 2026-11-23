@@ -20,7 +20,7 @@ in the order of the data PRD's UMI delivery:
     <rec>_right_gripper.csv, <rec>_left_gripper.csv
         gripper width per frame: frame (index in every file of the recording), width_m (0 = fully closed)
     <rec>_mosaic.mp4 (optional, --mosaic N per task folder or --mosaic_files)
-        review video: head on top, right and left wrist below, frame by frame at the cameras' frame rate; H.264 yuv420p,
+        review video: head on top, left wrist bottom left, right wrist bottom right, frame by frame at the cameras' frame rate; H.264 yuv420p,
         any player.
 
 Sync: the sync event is the episode's first step (the first robot0/gripper/state message); in each
@@ -108,7 +108,7 @@ def write_video(frames: list, fps: float, out_path: str, keep_parameter_sets: bo
 def mosaic(head: tuple, right: tuple, left: tuple, n_frames: int, out_path: str, fps: float,
         encoder: str = 'libx264', width: int = 1280, threads: int = 0):
     """
-    Review mosaic (ffmpeg): head on top (width x 3/4 width), right and left wrist below (half width
+    Review mosaic (ffmpeg): head on top (width x 3/4 width), left wrist bottom left, right wrist bottom right (half width
     each), each input from its sync frame on ((file, sync_frame_index)), n_frames frames at the
     cameras' frame rate fps (every frame, none dropped or repeated), H.264 yuv420p faststart. Each
     input's frames are timed by their number from the sync frame (frame k at k / fps), so the three
@@ -124,7 +124,7 @@ def mosaic(head: tuple, right: tuple, left: tuple, n_frames: int, out_path: str,
     trims = [f"[{k}:v]trim=start_frame={sync}:end_frame={sync + n_frames},setpts=N*{rate.denominator}/({rate.numerator}*TB),"
         f"scale={size}:out_range=tv,setsar=1[v{k}]" for k, ((_, sync), size) in
         enumerate(zip((head, right, left), (f'{width}:{h1}', f'{w2}:{h2}', f'{w2}:{h2}')))]
-    graph = ';'.join(trims) + ";[v1][v2]hstack=inputs=2[bottom];[v0][bottom]vstack=inputs=2,format=yuv420p[out]"
+    graph = ';'.join(trims) + ";[v2][v1]hstack=inputs=2[bottom];[v0][bottom]vstack=inputs=2,format=yuv420p[out]"
     codec = ['-c:v', encoder] + (['-preset', 'veryfast', '-crf', '23'] if encoder == 'libx264' else ['-preset', 'p4', '-cq', '23'])
     limit = ['-filter_complex_threads', str(threads), '-threads', str(threads)] if threads else []
     subprocess.run(['ffmpeg', '-v', 'error', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', *codec, *limit,
