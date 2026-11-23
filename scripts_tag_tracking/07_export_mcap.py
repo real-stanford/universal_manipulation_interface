@@ -18,9 +18,11 @@ file per episode (JSON schemas umi.msg.* and foxglove.*), viewable in Foxglove:
   metadata 'recording'            episode, robot, camera and frame information
   metadata 'camera{j}'             (with -c) role, serial, model, firmware, lens, stabilization,
                                    field of view, resolution, frame rate, Kannala-Brandt intrinsics
-  metadata 'sync'                  (with -c) method, per camera the video frame of the episode's
-                                   first step (the same instant in all files) and its clock offset,
-                                   per wrist camera the motion sync uncertainty
+  metadata 'sync'                  (with -c) method, per camera its clock offset, per wrist camera the
+                                   motion sync uncertainty; without --exact_start also per camera the
+                                   frame of its video at the episode's first step (camera{j}_sync_frame)
+  metadata 'source'                per camera the original GoPro video (demos/ folder name) and the
+                                   episode's frame range in it (provenance, not needed for sync)
 
 Robots in robot_index order (UMI: 0 right, 1 left); cameras as in the plan:
 wrist cameras in robot order, then the head camera.
@@ -396,10 +398,21 @@ def write_episode(path, episode_index, plan_episode, demos_dir, world_tag, video
         if sync_record is not None:
             writer.add_metadata('sync', {
                 **sync_record,
-                **{f'camera{c}_sync_frame': str(int(camera['video_start_end'][0])) for c, camera in enumerate(cameras)},
+                # keyframe start: where the episode starts in each camera's video (the MCAP video starts earlier);
+                # exact start: not written, every MCAP video starts at the episode start (its frame 0)
+                **({} if exact_start else {f'camera{c}_sync_frame': str(int(camera['video_start_end'][0]))
+                    for c, camera in enumerate(cameras)}),
                 **{f'camera{c}_offset_ms': f"{camera['clock_correction_ms']:.3f}"
                     for c, camera in enumerate(cameras) if camera.get('clock_correction_ms') is not None},
             })
+        # provenance, not needed for sync: the original GoPro video of each camera and the frame range of
+        # the episode in it (frame 0 of the MCAP video = source_first_frame with exact start)
+        writer.add_metadata('source', {
+            **{f'camera{c}_source_video': pathlib.Path(camera['video_path']).parent.name
+                for c, camera in enumerate(cameras)},
+            **{f'camera{c}_source_first_frame': str(int(camera['video_start_end'][0])) for c, camera in enumerate(cameras)},
+            **{f'camera{c}_source_end_frame': str(int(camera['video_start_end'][1])) for c, camera in enumerate(cameras)},
+        })
         writer.finish()
     return path
 
