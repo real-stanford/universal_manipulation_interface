@@ -63,6 +63,7 @@ from umi.tag_tracking.imu import load_imu
 from umi.tag_tracking.config import load_tag_tracking_config
 from umi.tag_tracking.camera_metadata import camera_record
 from umi.common.exiftool_util import ExifTool
+from umi.common.hevc_util import cut_from
 from scipy.spatial.transform import Rotation
 
 SYNC_METHOD = 'audio cross-correlation, wrist motion refinement'
@@ -164,72 +165,14 @@ def video_messages(video_path: str, start_frame: int, stop_frame: int):
 def video_messages_exact(video_path: str, start_frame: int, stop_frame: int, crf: int = 16):
     """
     (frame index, Annex B data) of frames [start_frame, stop_frame) exactly, no frames before
-    start_frame: the frames from start_frame up to the next keyframe are decoded (from the
-    keyframe before start_frame) and re-encoded as H.265 (libx265, first frame a keyframe, no
-    B-frames, Main profile, full range like the GoPro stream), the rest is the original stream
-    (from its next keyframe, which carries the original VPS / SPS / PPS). Only the first GOP is
-    re-encoded (at most one second at GoPro's one keyframe per second).
+    start_frame: the frames from start_frame up to the next keyframe re-encoded (libx265, first frame
+    a keyframe, no B-frames, full range like the GoPro stream), the rest the original stream (from
+    its next keyframe, which carries the original VPS / SPS / PPS); umi.common.hevc_util.cut_from.
+    Only the first GOP is re-encoded (at most one second at GoPro's one keyframe per second).
     """
-    from fractions import Fraction
     with av.open(video_path) as container:
-        stream = container.streams.video[0]
-        assert stream.codec_context.name == 'hevc', f"{video_path}: {stream.codec_context.name}, expected hevc"
-        extradata = bytes(stream.codec_context.extradata)
-        length_size = (extradata[21] & 3) + 1
-        parameter_sets = hevc_parameter_sets(extradata)
-        fps = float(stream.average_rate)
-        frame_time = lambda pts: float(pts * stream.time_base) - float((stream.start_time or 0) * stream.time_base)
-        container.seek(int(max(0.0, start_frame / fps - 0.001) / stream.time_base), stream=stream,
-            backward=True, any_frame=False)
-        decoder = av.CodecContext.create('hevc', 'r')
-        decoder.extradata = extradata
-        encoder = None
-        head, n_encoded = list(), 0     # re-encoded frames before the next original keyframe
-        started, copying = False, False
-        for packet in container.demux(stream):
-            if packet.size == 0 or packet.pts is None:
-                continue
-            index = int(round(frame_time(packet.pts) * fps))
-            if index >= stop_frame:
-                break
-            if not started:
-                if not packet.is_keyframe:
-                    continue
-                assert index <= start_frame, f"{video_path}: first keyframe {index} after episode start {start_frame}"
-                started = True
-                if index == start_frame:   # the episode starts on a keyframe: the original stream as it is
-                    copying = True
-            if not copying and packet.is_keyframe and index >= start_frame:
-                copying = True             # a keyframe at or after the start: from here the original stream
-            if copying:
-                if encoder is not None:    # flush the re-encoded start first
-                    for p in encoder.encode(None):
-                        head.append(bytes(p))
-                    for i, data in enumerate(head):
-                        yield start_frame + i, data
-                    encoder, head = None, list()
-                yield index, to_annexb(bytes(packet), length_size, parameter_sets, packet.is_keyframe)
-                continue
-            # before the next keyframe: decode, re-encode from start_frame on
-            for frame in decoder.decode(av.Packet(bytes(packet))):
-                if index < start_frame:
-                    continue
-                if encoder is None:
-                    encoder = av.CodecContext.create('libx265', 'w')
-                    encoder.width, encoder.height = frame.width, frame.height
-                    encoder.pix_fmt = frame.format.name
-                    encoder.time_base = Fraction(1, 1) / Fraction(stream.average_rate)
-                    encoder.options = {'preset': 'fast', 'crf': str(crf), 'x265-params':
-                        'bframes=0:repeat-headers=1:aud=1:open-gop=0:keyint=600:range=full:log-level=error'}
-                frame.pts = n_encoded
-                n_encoded += 1
-                for p in encoder.encode(frame):
-                    head.append(bytes(p))
-        if encoder is not None:            # the episode ended before the next keyframe
-            for p in encoder.encode(None):
-                head.append(bytes(p))
-            for i, data in enumerate(head):
-                yield start_frame + i, data
+        rate = container.streams.video[0].average_rate
+    yield from cut_from(video_messages(video_path, start_frame, stop_frame), start_frame, rate, crf)
 
 
 def frame0_time(camera: dict, times: np.ndarray, dt: float) -> float:

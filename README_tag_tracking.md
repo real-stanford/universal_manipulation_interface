@@ -523,13 +523,21 @@ declared in the delivery yaml (`outcome` `unknown` where not declared). `validat
 
 ### 7. Rhoda delivery (three files per recording, from the MCAPs)
 
-The data PRD's UMI delivery, made from the episode MCAP files (step 5 / `process_station.py
---mcap`): one folder per recording (episode) with the three camera videos, the metadata and the
-per-frame data. The videos are not re-encoded.
+The data PRD's UMI delivery, made in one pass from the episode MCAP files (with or without
+`07_export_mcap.py --exact_start`, local or on S3): one folder per recording (episode) with the three
+camera videos, the metadata and the per-frame data. All three files cover exactly the episode with the
+same frame count, so frame `i` is the same instant in every file (PRD U2).
 
 ```
 python scripts_tag_tracking/14_export_rhoda.py <mcap / folder / s3:// / paths.csv> -o <out> [--mosaic 3]
 ```
+
+MCAPs exported without `--exact_start` (all of `process_station.py --mcap` so far) start each camera
+at the keyframe before the episode; the export re-encodes per camera only the frames from the episode
+start to the next keyframe (at most 1 s, 07's `--exact_start` code) in memory and copies the rest.
+No corrected MCAP is written. (To store corrected MCAPs themselves, e.g. for another delivery:
+`exact_start_mcaps.py <mcap / folder / s3://> -o <folder or s3://> -w <workdir>`, same re-encode;
+`recording` `video_start` becomes `exact`, `sync` `camera{j}_sync_frame` moves to `source`.)
 
 Input: one MCAP, a folder or `s3://` prefix with MCAPs below it, or the paths CSV of
 `describe_mcaps.py --list_only`. S3 files are downloaded one at a time and deleted after.
@@ -538,13 +546,10 @@ Recording name: task folder + file name (`station3/2026-11-21/task01/episode_000
 
 | File | Content |
 |---|---|
-| `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the MCAP's camera videos (the GoPro's H.265, already synchronized), moved into mp4 by stream copy: parameter sets in the header, tagged `hvc1` (QuickTime / Safari), faststart. Each file starts where the MCAP video starts: at the keyframe before the episode, up to 1 s |
-| `<rec>_meta.json` | `cameras`: per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); `sync`: method and the frame index of the sync event in each file |
-| `<rec>_right_gripper.csv`, `_left_gripper.csv` | gripper width per frame: `frame` (index in `<rec>_right.mp4` / `<rec>_left.mp4`, one row per frame), `width_m` (0 = fully closed; empty before the episode) |
-| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, right and left wrist below, each from its sync frame, stacked frame by frame; H.264 yuv420p 30 fps; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
-
-The sync event is the episode's first step: the same instant in all three files (each camera's frame
-nearest to it, within half a frame).
+| `<rec>_head.mp4`, `_left.mp4`, `_right.mp4` | the MCAP's camera videos, frame 0 = the episode's first step, one frame per step; the GoPro's H.265 stream-copied, faststart, except the re-encoded start (at most 1 s). Tagged `hev1` when the start is re-encoded (two encodings keep their parameter sets in the stream), else `hvc1` |
+| `<rec>_meta.json` | `cameras`: per camera model, lens, field of view, resolution, frame rate, intrinsics (MCAP exported with `-c`); `sync`: method and the frame index of the sync event in each file (0: every file starts at it) |
+| `<rec>_right_gripper.csv`, `_left_gripper.csv` | gripper width per frame: `frame` (index in every file of the recording), `width_m` (0 = fully closed) |
+| `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, right and left wrist below, frame by frame at the cameras' frame rate (every frame); H.264 yuv420p; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
 
 ## Frame sync check
 
