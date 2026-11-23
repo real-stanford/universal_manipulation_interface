@@ -1,0 +1,119 @@
+# Tag tracking config for station2, drafted by scripts_tag_tracking/propose_station_config.py
+# from session task01 (template tag_tracking_station1.yaml).
+# Station2 from 2026-11-22 on (cube retagged: 2-5 and 8-11; before, both cubes carried 8-11).
+# Filled in by hand: cameras / head_imu / gripper_imu (station2_head / _left / _right imported 2026-11-23;
+# head and right camera-IMU translation = HERO12 mean, their estimates 4.9 / 2.4 mm), tag 11 on the 8-10
+# cube (never seen by the head in task01). Setup calibration: run calibrate_setup.py on task01 first.
+#
+# cameras: head C3501326496309, right C3501326499922, left C3501326497208
+# right camera C3501326499922, GX010325.MP4: finger candidates 0 (100%, x 0.78), 1 (100%, x 0.24), 6 (93%, x 0.09)
+# right finger pair asymmetry 0.02 (0 = mirror positions)
+# left camera C3501326497208, GX010451.MP4: finger candidates 1 (86%, x 0.93), 6 (100%, x 0.77), 7 (100%, x 0.23)
+# left finger pair asymmetry 0.00 (0 = mirror positions)
+# right finger tags 1 (image left) / 0 (image right)
+# left finger tags 7 (image left) / 6 (image right)
+# head takes: cube tags 2-3 seen together in 234 frames, 1.0 sides apart
+# head takes: cube tags 2-4 seen together in 166 frames, 0.9 sides apart
+# head takes: cube tags 2-5 seen together in 140 frames, 1.0 sides apart
+# head takes: cube tags 2-8 seen together in 334 frames, 2.9 sides apart
+# head takes: cube tags 2-9 seen together in 230 frames, 2.8 sides apart
+# head takes: cube tags 2-10 seen together in 267 frames, 2.8 sides apart
+# head takes: cube tags 3-4 seen together in 105 frames, 1.0 sides apart
+# head takes: cube tags 3-5 seen together in 329 frames, 0.9 sides apart
+# head takes: cube tags 3-8 seen together in 466 frames, 6.8 sides apart
+# head takes: cube tags 3-9 seen together in 251 frames, 4.0 sides apart
+# head takes: cube tags 3-10 seen together in 432 frames, 7.2 sides apart
+# head takes: cube tags 4-8 seen together in 140 frames, 2.9 sides apart
+# head takes: cube tags 4-9 seen together in 125 frames, 2.8 sides apart
+# head takes: cube tags 4-10 seen together in 83 frames, 2.2 sides apart
+# head takes: cube tags 5-8 seen together in 379 frames, 6.9 sides apart
+# head takes: cube tags 5-9 seen together in 112 frames, 7.3 sides apart
+# head takes: cube tags 5-10 seen together in 355 frames, 7.4 sides apart
+# head takes: cube tags 8-9 seen together in 289 frames, 1.0 sides apart
+# head takes: cube tags 8-10 seen together in 496 frames, 0.9 sides apart
+# head takes: cube tags 9-10 seen together in 242 frames, 1.1 sides apart
+# WARNING cube-size tags in the aruco config never seen by the head: [11] (a cube face turned away, or not in this station); add them to their cube if they belong to it
+# right wrist takes: sees cube [2, 3, 4, 5] 0%, cube [8, 9, 10] 0% (summed share of frames per tag)
+# left wrist takes: sees cube [2, 3, 4, 5] 19%, cube [8, 9, 10] 0% (summed share of frames per tag)
+# cube [2, 3, 4, 5] on the right gripper, [8, 9, 10] on the left (one wrist never sees the other cube: from one camera only)
+# head mapping: environment tags [14, 15, 16, 17, 20, 21, 32, 33, 34]
+# docked: 135 head frames with both cubes resting within 0.35 m of an environment tag
+# right cube docked, closest environment tag: 15 97% (0.17 m), 16 3% (0.23 m)
+# left cube docked, closest environment tag: 15 58% (0.25 m), 16 42% (0.18 m)
+# dock tags [15, 16] (closest to a docked cube in >= 25% of the docked frames)
+aruco_config: aruco_config.yaml
+corner_noise: corner_noise.json
+gripper_config: gripper_config_station2.yaml
+head_camera: C3501326496309
+# setup_calibration: setup_station2
+head_imu:
+  cam_imu_calibration: openicc/station2_head/cam_imu/cam_imu_calib_result_GX019309.json
+  noise_setting: gopro12_wide_fisheye_setting_720_C3501326496309.yaml
+  imu_time_offset: gpmf
+gripper_imu:
+  C3501326499922:   # right hand
+    cam_imu_calibration: openicc/station2_right/cam_imu/cam_imu_calib_result_GX010218.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326499922.yaml
+    imu_time_offset: gpmf
+  C3501326497208:   # left hand
+    cam_imu_calibration: openicc/station2_left/cam_imu/cam_imu_calib_result_GX010345.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326497208.yaml
+    imu_time_offset: gpmf
+accuracy:
+  position_std: 0.0061
+  rotation_std: 3.5
+cameras:
+  C3501326496309: openicc/station2_head/cam/cam_calib_GX019305_fi_1.0.json
+  C3501326499922: openicc/station2_right/cam/cam_calib_GX010215_fi_1.0.json
+  C3501326497208: openicc/station2_left/cam/cam_calib_GX010342_fi_1.0.json
+bodies:
+  environment:
+    static: true
+    tags:
+    - 14
+    - 15
+    - 16
+    - 17
+    - 20
+    - 21
+    - 32
+    - 33
+    - 34
+  right_cube:
+    tags:
+    - 2
+    - 3
+    - 4
+    - 5
+    gripper_camera: C3501326499922
+    robot_index: 0
+  left_cube:
+    tags:
+    - 8
+    - 9
+    - 10
+    - 11
+    gripper_camera: C3501326497208
+    robot_index: 1
+episodes:
+  dock_tags:
+  - 15
+  - 16
+  boundary: dock
+  dock_exit_distance: 0.45
+  still_sec: 1.0
+  gyro_still: 0.04
+  dock_distance: 0.35
+  min_dock_frames: 15
+  bang_accel: 5.0
+  bang_tolerance: 0.02
+  bang_search_tolerance: 0.06
+  bang_merge_sec: 0.5
+  audio_ratio: 5.0
+  audio_tolerance: 0.015
+  audio_lag_search: 0.3
+  lag_accel: 10.0
+  dock_window: 0.25
+  idle_margin: 1.0
+  min_episode_sec: 3.0
+  max_gap_sec: 0.25
