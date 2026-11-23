@@ -439,6 +439,16 @@ saves the frames Claude saw; `--dry_run` makes only the sheets. Needs Anthropic 
 python scripts_tag_tracking/describe_mcaps.py <folder or s3://...> -o mcap_tasks.csv [--sheets <dir>]
 ```
 
+One line per task (station, day, task folder) from those descriptions, and the episodes that do
+not fit it (description of another task, outcome not success, notes):
+
+```
+python scripts_tag_tracking/summarize_tasks.py mcap_tasks.csv -o task_summary
+```
+
+Writes `task_summary_tasks.csv` (station, day, task, episodes, minutes, good episodes, task line,
+objects) and `task_summary_mismatches.csv` (one row per flagged episode with the reason).
+
 ```
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config>
 python scripts_tag_tracking/check_tcp_frame.py -i <session> -c <config> --random 10
