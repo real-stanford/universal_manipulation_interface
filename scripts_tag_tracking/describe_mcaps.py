@@ -35,6 +35,7 @@ import pathlib
 import threading
 import click
 import av
+import av.logging
 import cv2
 import numpy as np
 from mcap.reader import make_reader
@@ -115,7 +116,7 @@ def head_frames(path: str, size: int, n: int):
         for target in targets:
             # decode from the last keyframe before the target (GoPro: one per second) up to the target
             packets = [base64.b64decode(json.loads(message.data)['data']) for _, _, message in
-                reader.iter_messages(topics=[topic], start_time=target - int(1.5e9), end_time=target + 1)]
+                reader.iter_messages(topics=[topic], starting_at=target - int(1.5e9), ending_at=target)]
             keys = [k for k, data in enumerate(packets) if is_keyframe(data)]
             if not keys:
                 continue
@@ -192,6 +193,7 @@ def describe(client, model: str, effort: str, frames: list, duration: float) -> 
 @click.option('--dry_run', is_flag=True, default=False, help='Frames and sheets only, no API call, no CSV')
 @click.option('-j', '--jobs', type=int, default=4, help='MCAP files in parallel')
 def main(root, output, n_frames, sheets, model, effort, dry_run, jobs):
+    av.logging.set_level(av.logging.ERROR)   # swscaler 'deprecated pixel format' per frame
     files = list_mcaps(root)
     assert files, f"no .mcap files under {root}"
     output = pathlib.Path(os.path.expanduser(output))
@@ -233,8 +235,9 @@ def main(root, output, n_frames, sheets, model, effort, dry_run, jobs):
         return f"{task}/{name}: {answer['task_description']}"
 
     failed = 0
-    with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-        futures = {pool.submit(one, item): item for item in todo}
+    pool = concurrent.futures.ThreadPoolExecutor(jobs)
+    futures = {pool.submit(one, item): item for item in todo}
+    try:
         for n, future in enumerate(concurrent.futures.as_completed(futures), 1):
             item = futures[future]
             try:
@@ -243,6 +246,12 @@ def main(root, output, n_frames, sheets, model, effort, dry_run, jobs):
                 failed += 1
                 print(f"{n}/{len(todo)} {item[2]}/{item[0].rsplit('/', 1)[-1]}: FAILED {type(e).__name__}: {e}",
                     flush=True)
+    except KeyboardInterrupt:
+        # Ctrl-C: drop the files not started, the ones running finish; their rows are kept
+        pool.shutdown(wait=False, cancel_futures=True)
+        print("stopped; rerun to continue (rows already written are skipped)")
+        raise SystemExit(1)
+    pool.shutdown()
     print(f"done, {len(todo) - failed} described, {failed} failed (rerun to retry them)" +
         ('' if dry_run else f"; {output}"))
 

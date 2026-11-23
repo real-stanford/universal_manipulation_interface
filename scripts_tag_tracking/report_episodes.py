@@ -26,7 +26,6 @@ import csv
 import json
 import pathlib
 import subprocess
-import tempfile
 import click
 from mcap.reader import make_reader
 
@@ -39,13 +38,15 @@ def split_s3(url: str):
 class S3File:
     """
     Read-only seekable view of an S3 object by ranged reads (block cache), enough for the MCAP
-    reader to read the summary and metadata at the end of the file.
+    reader to read the summary, the metadata and a few chunks. Ranges are fetched over HTTP
+    from one presigned URL per file (aws CLI once), not one aws CLI process per range.
     """
-    BLOCK = 2 << 20
+    BLOCK = 4 << 20
 
     def __init__(self, url: str, size: int):
+        self.url = url
         self.bucket, self.key = split_s3(url)
-        self.size, self.pos, self.blocks = size, 0, dict()
+        self.size, self.pos, self.blocks, self.presigned = size, 0, dict(), None
 
     def readable(self):
         return True
@@ -62,11 +63,20 @@ class S3File:
 
     def block(self, k: int) -> bytes:
         if k not in self.blocks:
+            import urllib.request
+            if self.presigned is None:
+                self.presigned = subprocess.run(['aws', 's3', 'presign', self.url, '--expires-in', '3600'],
+                    check=True, capture_output=True, text=True).stdout.strip()
             start, end = k * self.BLOCK, min(self.size, (k + 1) * self.BLOCK) - 1
-            with tempfile.NamedTemporaryFile() as f:
-                subprocess.run(['aws', 's3api', 'get-object', '--bucket', self.bucket, '--key', self.key,
-                    '--range', f'bytes={start}-{end}', f.name], check=True, capture_output=True)
-                self.blocks[k] = pathlib.Path(f.name).read_bytes()
+            request = urllib.request.Request(self.presigned, headers={'Range': f'bytes={start}-{end}'})
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        self.blocks[k] = response.read()
+                    break
+                except OSError:
+                    if attempt == 2:
+                        raise RuntimeError(f"{self.url}: bytes {start}-{end} not readable") from None
         return self.blocks[k]
 
     def read(self, n=-1):
