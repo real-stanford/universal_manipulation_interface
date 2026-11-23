@@ -154,6 +154,19 @@ def test_jobs_and_s3():
         result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'mcaps')), '-o', str(out), '-j', '2'])
         assert result.output.count('in the output, skipped') == 2, result.output
 
+        # --mosaic 2 per task folder: first and last of each task (task03: 0, 2; task04: 0, 4), not the
+        # same file names in every task (by name task04 would also get episode 2: 5 mosaics)
+        for task, n_files in [('task03', 3), ('task04', 5)]:
+            d = pathlib.Path(tmp, 'many', 'station1', task)
+            d.mkdir(parents=True)
+            for k in range(n_files):
+                shutil.copy(path, d.joinpath(f'episode_{k:06d}.mcap'))
+        many = pathlib.Path(tmp, 'many_out')
+        result = CliRunner().invoke(rhoda.main, [str(pathlib.Path(tmp, 'many')), '-o', str(many), '-j', '4', '--mosaic', '2'])
+        mosaics = sorted(r for r in os.listdir(many) if os.path.isfile(many.joinpath(r, f'{r}_mosaic.mp4')))
+        assert result.exit_code == 0 and mosaics == ['station1_task03_episode_000000', 'station1_task03_episode_000002',
+            'station1_task04_episode_000000', 'station1_task04_episode_000004'], (mosaics, result.output)
+
         # S3 in and out (aws faked): downloaded into the workdir, uploaded with meta.json last, all deleted
         bucket, uploads = dict(), list()
         real_run = subprocess.run

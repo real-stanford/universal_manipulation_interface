@@ -283,13 +283,15 @@ def main(source, output, workdir, jobs, n_mosaic, mosaic_files, mosaic_encoder, 
     by_task = collections.defaultdict(list)
     for path, size, task in files:
         by_task[task or '.'].append(path)
+    # mosaics: --mosaic_files by file name (in every task folder), --mosaic N per task folder by path
     chosen = set()
     if mosaic_files:
-        chosen = set(mosaic_files.split(','))
+        names = set(mosaic_files.split(','))
+        chosen = {path for path, _, _ in files if os.path.basename(path) in names}
     elif n_mosaic > 0:
         for task, paths in by_task.items():
             paths = sorted(paths)
-            chosen |= {os.path.basename(paths[int(round(i))]) for i in np.linspace(0, len(paths) - 1, min(n_mosaic, len(paths)))}
+            chosen |= {paths[int(round(i))] for i in np.linspace(0, len(paths) - 1, min(n_mosaic, len(paths)))}
     # CPU threads per job: the cores shared by the jobs (one job: all cores, ffmpeg / x265 default)
     threads = 0 if jobs <= 1 else max(1, (os.cpu_count() or jobs) // jobs)
     print(f"{len(files)} MCAP files in {len(by_task)} task folders -> {output}, {jobs} jobs"
@@ -297,7 +299,7 @@ def main(source, output, workdir, jobs, n_mosaic, mosaic_files, mosaic_encoder, 
 
     done, failed = 0, 0
     with concurrent.futures.ProcessPoolExecutor(jobs) as pool:
-        futures = {pool.submit(export_one, path, task, output, workdir, os.path.basename(path) in chosen,
+        futures = {pool.submit(export_one, path, task, output, workdir, path in chosen,
             mosaic_encoder, threads, overwrite): (path, task) for path, _, task in sorted(files, key=lambda f: (f[2], f[0]))}
         for n, future in enumerate(concurrent.futures.as_completed(futures), 1):
             path, task = futures[future]
