@@ -100,7 +100,29 @@ def test_no_motion():
     assert drift_line(fits) is None
 
 
+def test_untracked_episode():
+    # the head never tracks the cube during one episode (no frame pair): that episode gets no fit,
+    # the others still sync and give the drift line
+    duration = 120.0
+    t_fine, omega, slerp, rng = synthetic_take(duration, 2)
+    times = np.arange(0.0, duration - 1.0, 1 / FPS)
+    rows = np.full(len(times), 0.5)
+    T = np.tile(np.eye(4), (len(times), 1, 1))
+    T[:, :3, :3] = slerp(times + READOUT * rows).as_matrix()
+    episodes = [{'start': s, 'end': s + 15.0} for s in [10.0, 35.0, 60.0, 85.0]]
+    valid = np.ones(len(times), dtype=bool)
+    valid[(times >= 30.0) & (times <= 55.0)] = False            # all of the second episode
+    gyro_times = np.arange(0.5, duration - 0.5, 1 / GYRO_RATE)
+    gyro = np.stack([np.interp(gyro_times, t_fine, omega[:, j]) for j in range(3)], axis=1)
+    fits = sync_episodes(times, observation_times(times, rows, READOUT, 0.0, 2028), rows, T, valid, episodes,
+        gyro_times - ERROR(gyro_times), gyro, {})
+    assert len(fits) == 4 and fits[1][1] is None and all(f is not None for k, (_, f) in enumerate(fits) if k != 1), fits
+    line = drift_line(fits)
+    assert line['n_episodes'] == 3 and abs(correction_seconds(line, 60.0) - ERROR(60.0)) < 0.0005, line
+
+
 if __name__ == '__main__':
+    test_untracked_episode()
     test_sync_and_readout()
     test_observation_times()
     test_no_motion()

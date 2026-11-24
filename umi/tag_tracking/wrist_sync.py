@@ -66,6 +66,8 @@ def head_rotation_rates(obs_times: np.ndarray, rows: np.ndarray, T_world_body: n
     k1 = k0 + interval
     t0 = obs_times[k0]
     t1 = obs_times[k1]
+    if len(k0) == 0:                # the cube not tracked in any frame pair (scipy rejects an empty rotation)
+        return t0, t1, np.zeros((0, 3)), np.zeros(0)
     R0 = Rotation.from_matrix(T_world_body[k0, :3, :3])
     R1 = Rotation.from_matrix(T_world_body[k1, :3, :3])
     rotvec = (R0.inv() * R1).as_rotvec()
@@ -152,6 +154,9 @@ def sync_episodes(times: np.ndarray, obs_times: np.ndarray, rows: np.ndarray, T_
         in_episode = valid & (times >= e['start']) & (times <= e['end'])
         t0, t1, omega, pair_rows = head_rotation_rates(obs_times, rows, T_world_body, in_episode,
             params['interval_frames'])
+        if len(t0) < params['min_pairs']:   # cube hardly tracked by the head in this episode: no fit
+            out.append((e, None))
+            continue
         out.append((e, fit_shift(t0, t1, omega, pair_rows, gyro_times, integral, shifts, params['min_pairs'])))
     return out
 
