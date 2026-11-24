@@ -1,10 +1,14 @@
 """
-H.265 Annex B access units (one per frame, as in the MCAP video messages): keyframe test and the
-cut of a stream at any frame with only the first GOP re-encoded (07_export_mcap.py --exact_start,
-exact_start_mcaps.py).
+H.265 Annex B access units (one per frame, as in the MCAP video messages): read from a GoPro MP4
+(video_messages, video_messages_exact), keyframe test, and the cut of a stream at any frame with
+only the first GOP re-encoded (07_export_mcap.py --exact_start, 14_export_rhoda.py,
+15_export_episode_videos.py, exact_start_mcaps.py).
 """
 from fractions import Fraction
 import av
+
+START_CODE = b'\x00\x00\x00\x01'
+HEVC_AUD = 35
 
 IRAP_AND_VPS = {16, 17, 18, 19, 20, 21, 32}   # IRAP pictures, VPS
 
@@ -108,3 +112,77 @@ def cut_to_steps(times, frames: list, steps, rate, crf: int = 16, threads: int =
     out = list(cut_from(((i, frames[i]) for i in range(start + n)), start, rate, crf, threads))
     assert len(out) == n, f"{len(out)} frames after the cut, {n} steps"
     return start, not is_keyframe(frames[start]), out
+
+
+def hevc_parameter_sets(extradata: bytes) -> list:
+    """
+    VPS, SPS, PPS NAL units from an MP4 hvcC record.
+    """
+    assert extradata[0] == 1, "expected an hvcC record (MP4 HEVC)"
+    out, i = list(), 23
+    for _ in range(extradata[22]):
+        count = int.from_bytes(extradata[i + 1:i + 3], 'big')
+        i += 3
+        for _ in range(count):
+            length = int.from_bytes(extradata[i:i + 2], 'big')
+            out.append(extradata[i + 2:i + 2 + length])
+            i += 2 + length
+    return out
+
+
+def to_annexb(packet: bytes, length_size: int, parameter_sets: list, keyframe: bool) -> bytes:
+    """
+    MP4 length-prefixed NAL units -> Annex B; on keyframes the parameter sets
+    follow the access unit delimiter (or lead if there is none).
+    """
+    nals, i = list(), 0
+    while i + length_size <= len(packet):
+        length = int.from_bytes(packet[i:i + length_size], 'big')
+        nals.append(packet[i + length_size:i + length_size + length])
+        i += length_size + length
+    if keyframe:
+        at = 1 if nals and ((nals[0][0] >> 1) & 0x3f) == HEVC_AUD else 0
+        nals = nals[:at] + parameter_sets + nals[at:]
+    return b''.join(START_CODE + n for n in nals)
+
+
+def video_messages(video_path: str, start_frame: int, stop_frame: int):
+    """
+    (frame index, Annex B data) of frames [keyframe before start_frame, stop_frame).
+    """
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        assert stream.codec_context.name == 'hevc', f"{video_path}: {stream.codec_context.name}, expected hevc"
+        extradata = bytes(stream.codec_context.extradata)
+        length_size = (extradata[21] & 3) + 1
+        parameter_sets = hevc_parameter_sets(extradata)
+        fps = float(stream.average_rate)
+        frame_time = lambda pts: float(pts * stream.time_base) - float((stream.start_time or 0) * stream.time_base)
+        container.seek(int(max(0.0, start_frame / fps - 0.001) / stream.time_base), stream=stream,
+            backward=True, any_frame=False)
+        started = False
+        for packet in container.demux(stream):
+            if packet.size == 0 or packet.pts is None:
+                continue
+            index = int(round(frame_time(packet.pts) * fps))
+            if index >= stop_frame:
+                break
+            if not started:
+                if not packet.is_keyframe:
+                    continue
+                assert index <= start_frame, f"{video_path}: first keyframe {index} after episode start {start_frame}"
+                started = True
+            yield index, to_annexb(bytes(packet), length_size, parameter_sets, packet.is_keyframe)
+
+
+def video_messages_exact(video_path: str, start_frame: int, stop_frame: int, crf: int = 16):
+    """
+    (frame index, Annex B data) of frames [start_frame, stop_frame) exactly, no frames before
+    start_frame: the frames from start_frame up to the next keyframe re-encoded (libx265, first frame
+    a keyframe, no B-frames, full range like the GoPro stream), the rest the original stream (from
+    its next keyframe, which carries the original VPS / SPS / PPS); umi.common.hevc_util.cut_from.
+    Only the first GOP is re-encoded (at most one second at GoPro's one keyframe per second).
+    """
+    with av.open(video_path) as container:
+        rate = container.streams.video[0].average_rate
+    yield from cut_from(video_messages(video_path, start_frame, stop_frame), start_frame, rate, crf)

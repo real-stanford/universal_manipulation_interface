@@ -127,7 +127,55 @@ def test_download_space_check():
         assert calls == [], "nothing may run (no download) when the session does not fit"
 
 
+def test_videos_only():
+    assert process_station.task_path('s3://b/UMI_Collection/station3/industrial_data/2026-11-22', 'task01') \
+        == 'station3/2026-11-22/task01'
+    assert process_station.task_path('/data/station1/industrial_data', 'task02') == 'station1/task02'
+    assert process_station.task_path('/data/x', 'task02') == 'task02'
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp, 'work')
+        s = make_session(root)
+        calls = list()
+
+        def fake_run(cmd, log):
+            cmd = [str(c) for c in cmd]
+            calls.append(cmd)
+            if '15_export_episode_videos.py' in ' '.join(cmd):
+                return 0, ['1/2 ...', 'done: 2 ok, 0 failed, 0 skipped (rerun to retry ...)']
+            if 'run_tag_tracking_pipeline.py' in ' '.join(cmd):
+                return 0, ['2 episodes, 30.0s of 40.0s used (75%)']
+            return 0, []
+        process_station.run = fake_run
+        process_station.s3_total_bytes = lambda url: 0
+        job = {'name': 'station3', 'sessions': 's3://b/UMI_Collection/station3/industrial_data/2026-11-22',
+            'config': 'c.yaml', 'on_s3': True, 'root': root, 'names': ['task01'], 'upload': None,
+            'mp4': 's3://b/umi_data/industrial_data_mp4'}
+        summary = process_station.process(job, False, False, True, None, n_mosaic=1000, mp4_jobs=4)
+        steps = [c[1] if c[0] != 'aws' else 'download' for c in calls]
+        assert steps == ['download', 'run_tag_tracking_pipeline.py', 'scripts_tag_tracking/15_export_episode_videos.py'], steps
+        assert '--videos_only' in calls[1]
+        export = calls[2]
+        assert export[export.index('--task') + 1] == 'station3/2026-11-22/task01' and export[export.index('-o') + 1] == \
+            's3://b/umi_data/industrial_data_mp4' and export[export.index('--mosaic') + 1] == '1000', export
+        name, status, failed, plan_yield, _ = summary[0]
+        assert status == 'ok', failed
+        assert 'episode videos 2 ok, 0 failed, 0 skipped' in plan_yield and 'cleanup: deleted 2 videos' in plan_yield \
+            and 'episode videos on s3://b/umi_data/industrial_data_mp4/station3/2026-11-22/task01' in plan_yield, plan_yield
+        assert not list(s.rglob('*.mp4')) and not list(s.rglob('*.MP4'))
+        # --videos_only replaces --mcap / --upload
+        config = pathlib.Path(tmp, 'config.yaml')
+        config.write_text('setup_calibration: setup_x\n')
+        local = pathlib.Path(tmp, 'local', 'station3', 'industrial_data')
+        local.joinpath('task01', 'raw_videos').mkdir(parents=True)
+        try:
+            process_station.station_job(str(local), str(config), None, None, True, None, False, mp4='s3://b/x')
+            raise RuntimeError('accepted --mcap with --mp4')
+        except AssertionError:
+            pass
+
+
 if __name__ == '__main__':
+    test_videos_only()
     test_download_space_check()
     test_batched_mcap()
     test_station_job()

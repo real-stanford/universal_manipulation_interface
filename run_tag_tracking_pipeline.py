@@ -27,6 +27,11 @@ gripper_tcp:       scripts_tag_tracking/05_calibrate_gripper_tcp.py     -> tag_t
 render:            scripts_tag_tracking/04_render_tracking.py           -> head demos/*/tag_tracking_render.mp4
 export_plan:       scripts_tag_tracking/06_export_dataset_plan.py       -> dataset_plan.pkl
 
+--videos_only (episode videos, 15_export_episode_videos.py): the steps the episodes, their
+synchronized frame ranges and the gripper widths need; the head tracking of the cubes stays (the
+motion sync measures from it), fuse_grippers and render are skipped, export_plan runs
+with --ignore_poses (every episode kept whole, poses not used).
+
 Each step's output is shown and written to <session>/logs/<nn>_<name>.log.
 sort_videos, imu, wrist_tags and head_tags skip videos whose output exists;
 the other steps always rerun. --start_from / --stop_after select a range of steps.
@@ -92,9 +97,11 @@ def run(script_path, args, log_path):
 @click.option('-sf', '--start_from', type=click.Choice(STEP_NAMES), default=STEP_NAMES[0], help='First step to run')
 @click.option('-sa', '--stop_after', type=click.Choice(STEP_NAMES), default=STEP_NAMES[-1], help='Last step to run')
 @click.option('-nr', '--no_render', is_flag=True, default=False, help='Skip the render step')
+@click.option('-vo', '--videos_only', is_flag=True, default=False,
+    help='Episode videos only: skip fuse_grippers and render, export_plan with --ignore_poses')
 @click.option('-j', '--num_workers', type=int, default=None,
     help='Parallel processes for imu, wrist_tags, audio_sync, head_tags, track_bodies and fuse_head_imu, default all cores')
-def main(session_dir, config, camera_intrinsics, start_from, stop_after, no_render, num_workers):
+def main(session_dir, config, camera_intrinsics, start_from, stop_after, no_render, videos_only, num_workers):
     root_dir = pathlib.Path(__file__).parent
     slam_dir = root_dir.joinpath('scripts_slam_pipeline')
     tag_dir = root_dir.joinpath('scripts_tag_tracking')
@@ -142,14 +149,16 @@ def main(session_dir, config, camera_intrinsics, start_from, stop_after, no_rend
             'fuse_grippers': (tag_dir.joinpath('03c_fuse_gripper_imu.py'), tag_args + workers),
             'gripper_tcp': (tag_dir.joinpath('05_calibrate_gripper_tcp.py'), tag_args),
             'render': (tag_dir.joinpath('04_render_tracking.py'), tag_args),
-            'export_plan': (tag_dir.joinpath('06_export_dataset_plan.py'), tag_args),
+            'export_plan': (tag_dir.joinpath('06_export_dataset_plan.py'),
+                tag_args + (['--ignore_poses'] if videos_only else [])),
         }
         assert set(steps) == set(STEP_NAMES)  # steps run in STEP_NAMES order
         skip = {
             'fuse_head_imu': None if 'head_imu' in config_yaml else "no head_imu in config",
             'segment_episodes': None if 'episodes' in config_yaml else "no episodes in config (one take = one demo)",
-            'render': "--no_render" if no_render else None,
-            'fuse_grippers': None if 'gripper_imu' in config_yaml else "no gripper_imu in config",
+            'render': "--no_render" if no_render else "--videos_only" if videos_only else None,
+            'fuse_grippers': "--videos_only (no gripper poses)" if videos_only
+                else None if 'gripper_imu' in config_yaml else "no gripper_imu in config",
             'trim_docking': None if 'episodes' in config_yaml else "no episodes in config",
             'sync_wrists': None if ('gripper_imu' in config_yaml and 'episodes' in config_yaml)
                 else "needs episodes and gripper_imu in config",

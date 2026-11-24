@@ -16,6 +16,11 @@ Process all (or some) sessions of a station, one after the other: per session
    the same size, the local videos (demos/*/raw_video.mp4 and raw_videos/: the originals stay
    in the S3 session) and the local MCAP files are deleted; logs, pairs.csv, tag tracking
    outputs and dataset_plan.pkl are kept. Not deleted if anything does not match.
+--videos_only --mp4 <prefix> (episode videos, no poses, no MCAP files): instead of 2.-5., the
+pipeline with --videos_only (episodes, head cube tracking for the motion sync, wrist sync, gripper
+widths, plan with --ignore_poses) and 15_export_episode_videos.py to <mp4>/<station>/<date>/<task>/
+(three mp4s, gripper CSVs, meta.json per episode, --mosaic N, report.json per task); with --cleanup
+the local videos are deleted once the export has run (the originals stay in the S3 session).
 A session that fails does not stop the others. At the end, per session: status, the
 failed step and its log, and the yield (episodes, seconds used). The output of each
 session is also written to <session>/logs/process_station.log.
@@ -37,7 +42,11 @@ Several stations one after the other (--jobs, e.g. example/tag_tracking/process_
     - sessions: ...
 python scripts_tag_tracking/process_station.py --jobs jobs.yaml --mcap --cleanup
 All stations are checked (configs, sessions found) before the first starts; one summary at the end.
-Resume after a failure: --start_from pipeline / plan / mcap / upload (e.g. after freeing disk).
+Resume after a failure: --start_from pipeline / plan / mcap / upload / export (e.g. after freeing disk).
+
+python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data/2026-11-22 \\
+    -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/2026-11-22 \\
+    --videos_only --mp4 s3://my-bucket/umi_data/industrial_data_mp4 --mosaic 1000 --cleanup
 """
 # %%
 import sys
@@ -90,7 +99,7 @@ def not_uploaded(paths: list, upload_url: str) -> list:
     return sorted(p.name for p in paths if remote.get(p.name) != p.stat().st_size)
 
 
-def cleanup(session: pathlib.Path, upload_url: str, mcaps_verified: bool = False) -> str:
+def cleanup(session: pathlib.Path, upload_url: str, mcaps_verified: bool = False, what: str = 'MCAP files') -> str:
     """
     Delete the local videos and MCAP files of a session whose MCAP files are all on S3
     (same names and sizes; mcaps_verified: already checked and deleted batch by batch).
@@ -109,7 +118,7 @@ def cleanup(session: pathlib.Path, upload_url: str, mcaps_verified: bool = False
     for p in videos + links + mcaps:
         p.unlink()
     return f"cleanup: deleted {len(videos)} videos, {len(links)} raw_videos entries, {len(mcaps)} MCAP files " \
-        f"({freed / 1e9:.1f} GB); videos stay in the S3 session, MCAP files on {upload_url}"
+        f"({freed / 1e9:.1f} GB); videos stay in the S3 session, {what} on {upload_url}"
 
 
 def s3_sessions(url: str) -> list:
@@ -141,7 +150,19 @@ def run(cmd: list, log) -> tuple:
     return p.returncode, lines
 
 
-def station_job(sessions: str, config: str, workdir, tasks, mcap: bool, upload, cleanup_after: bool, name=None) -> dict:
+def task_path(sessions: str, name: str) -> str:
+    """
+    A session's folders in the episode video output: from the station folder on, without
+    industrial_data (s3://b/UMI_Collection/station3/industrial_data/2026-11-22 + task01 ->
+    station3/2026-11-22/task01); without a station folder: the session name.
+    """
+    parts = [p for p in f"{sessions.rstrip('/')}/{name}".split('://', 1)[-1].split('/') if p and p != 'industrial_data']
+    station = next((k for k, p in enumerate(parts) if re.fullmatch(r'station\d+', p)), None)
+    return '/'.join(parts[station:]) if station is not None else name
+
+
+def station_job(sessions: str, config: str, workdir, tasks, mcap: bool, upload, cleanup_after: bool, name=None,
+        mp4=None) -> dict:
     """
     One station's run, checked before anything starts: its sessions (all, or tasks), config,
     local folder, upload prefix.
@@ -168,16 +189,18 @@ def station_job(sessions: str, config: str, workdir, tasks, mcap: bool, upload, 
         names = wanted
     assert names, f"no sessions (folders with raw_videos/) in {sessions}"
     assert upload is None or mcap, "upload uploads the MCAP files: needs --mcap"
+    assert not (mp4 and (mcap or upload)), "--videos_only --mp4 replaces --mcap / --upload"
     # the videos are deleted only where they can be downloaded again
-    assert not cleanup_after or (on_s3 and upload), f"{sessions}: --cleanup needs sessions on s3:// and an upload"
+    assert not cleanup_after or (on_s3 and (upload or mp4)), \
+        f"{sessions}: --cleanup needs sessions on s3:// and an upload (--upload or --mp4)"
     if name is None:   # station name: the folder above the sessions folder, e.g. station3/industrial_data
         parts = sessions.split('/')
         name = parts[-2] if len(parts) > 1 and parts[-1] == 'industrial_data' else parts[-1]
     return {'name': name, 'sessions': sessions, 'config': config, 'on_s3': on_s3, 'root': root, 'names': names,
-        'upload': upload}
+        'upload': upload, 'mp4': mp4}
 
 
-STEPS = ['download', 'pipeline', 'plan', 'mcap', 'upload']
+STEPS = ['download', 'pipeline', 'plan', 'mcap', 'upload', 'export']
 
 
 def free_gb(path: pathlib.Path) -> float:
@@ -188,11 +211,11 @@ def free_gb(path: pathlib.Path) -> float:
 
 
 def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_workers, start_from='download',
-        batch_size: int = 10, spare_gb: float = 5.0) -> list:
+        batch_size: int = 10, spare_gb: float = 5.0, n_mosaic: int = 0, mp4_jobs: int = 4) -> list:
     """
     Run one station's sessions; returns per session (name, status, failed step, yield, minutes).
     """
-    sessions, config, upload = job['sessions'], job['config'], job['upload']
+    sessions, config, upload, mp4 = job['sessions'], job['config'], job['upload'], job.get('mp4')
     workers = [] if num_workers is None else ['-j', num_workers]
     py = sys.executable
     summary = list()
@@ -219,8 +242,14 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
                     continue
                 steps.append(('download', ['aws', 's3', 'sync', f"{sessions}/{name}", session, '--only-show-errors']))
             if STEPS.index(start_from) <= STEPS.index('pipeline'):
-                steps.append(('pipeline', [py, 'run_tag_tracking_pipeline.py', '-c', config, '-nr', *workers, session]))
-            if not no_keep_gaps and STEPS.index(start_from) <= STEPS.index('plan'):
+                steps.append(('pipeline', [py, 'run_tag_tracking_pipeline.py', '-c', config, '-nr',
+                    *(['--videos_only'] if mp4 else []), *workers, session]))
+            if mp4:
+                # episode videos straight from the session (no poses, no MCAP files)
+                steps.append(('export', [py, 'scripts_tag_tracking/15_export_episode_videos.py', '-i', session,
+                    '-c', config, '--task', task_path(sessions, name), '-o', mp4,
+                    '-w', session.joinpath('mp4_work'), '-j', mp4_jobs, '--mosaic', n_mosaic]))
+            if not mp4 and not no_keep_gaps and STEPS.index(start_from) <= STEPS.index('plan'):
                 steps.append(('plan --keep_gaps', [py, 'scripts_tag_tracking/06_export_dataset_plan.py',
                     '-i', session, '-c', config, '--keep_gaps']))
             batched = mcap and upload and STEPS.index(start_from) <= STEPS.index('mcap')
@@ -252,6 +281,11 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
                 if step in ('pipeline', 'plan --keep_gaps'):
                     found = [l for l in lines if re.match(r'\d+ episodes, ', l.strip())]
                     plan_yield = found[-1].strip() if found else plan_yield
+                if step == 'export':
+                    found = [l.strip() for l in lines if l.startswith('done: ')]
+                    exported = f"episode videos {found[-1][len('done: '):]}, {mp4.rstrip('/')}/{task_path(sessions, name)}" \
+                        if found else None
+                    plan_yield = f"{plan_yield}; {exported}" if plan_yield and exported else exported or plan_yield
                 if code != 0:
                     status = 'failed'
                     # the pipeline names the failed step and its log
@@ -289,7 +323,13 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
                 n = n_uploaded if batched else len(list(session.joinpath('dataset_mcap').glob('*.mcap')))
                 n = f"{n} MCAP files" + (' (uploaded and checked in batches, deleted locally)' if batched else '')
                 plan_yield = f"{plan_yield}; {n}" if plan_yield else n
-            if cleanup_after and status == 'ok':
+            if cleanup_after and status == 'ok' and mp4:
+                done = cleanup(session, f"{mp4.rstrip('/')}/{task_path(sessions, name)}", mcaps_verified=True,
+                    what='episode videos')
+                print(done, flush=True)
+                log.write(done + '\n')
+                plan_yield = f"{plan_yield}\n  {done}"
+            elif cleanup_after and status == 'ok':
                 done = cleanup(session, f"{upload.rstrip('/')}/{name}", mcaps_verified=batched)
                 print(done, flush=True)
                 log.write(done + '\n')
@@ -317,9 +357,15 @@ def process(job: dict, no_keep_gaps: bool, mcap: bool, cleanup_after: bool, num_
     help='Free disk needed beyond a session\'s download (processing outputs, one MCAP batch)')
 @click.option('--batch_size', type=int, default=10,
     help='With --mcap --upload: episodes exported, uploaded, checked and deleted locally per batch')
+@click.option('--videos_only', is_flag=True, default=False,
+    help='Episode videos only (no poses, no MCAP files): pipeline --videos_only and 15_export_episode_videos.py to --mp4')
+@click.option('--mp4', default=None, help='With --videos_only: output prefix (s3:// or local), <mp4>/<station>/<date>/<task>/')
+@click.option('--mosaic', 'n_mosaic', type=int, default=0, help='With --videos_only: mosaics per task (1000: all)')
+@click.option('--mp4_jobs', type=int, default=4, help='With --videos_only: episodes exported at the same time')
 @click.option('-j', '--num_workers', type=int, default=None, help='Parallel processes per step, default all cores')
 def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload, cleanup_after, start_from,
-        spare_gb, batch_size, num_workers):
+        spare_gb, batch_size, videos_only, mp4, n_mosaic, mp4_jobs, num_workers):
+    assert bool(videos_only) == bool(mp4), "--videos_only and --mp4 go together"
     if jobs_yaml:
         assert sessions is None and config is None, "--jobs replaces SESSIONS / -c (give them per station in the yaml)"
         entries = yaml.safe_load(open(os.path.expanduser(jobs_yaml), 'r'))
@@ -330,16 +376,17 @@ def main(sessions, config, workdir, tasks, jobs_yaml, no_keep_gaps, mcap, upload
                 "(a station needs its tag tracking config with setup_calibration, README step 2)"
         # every station checked before the first starts
         jobs = [station_job(e['sessions'], e['config'], e.get('workdir'), e.get('tasks'), mcap, e.get('upload'),
-            cleanup_after, e.get('name')) for e in entries]
+            cleanup_after, e.get('name'), mp4) for e in entries]
     else:
         assert sessions and config, "SESSIONS and -c, or --jobs"
-        jobs = [station_job(sessions, config, workdir, tasks, mcap, upload, cleanup_after)]
+        jobs = [station_job(sessions, config, workdir, tasks, mcap, upload, cleanup_after, mp4=mp4)]
     for job in jobs:
         print(f"{job['name']}: {len(job['names'])} sessions: {', '.join(job['names'])}", flush=True)
 
     summary = list()
     for job in jobs:
-        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from, batch_size, spare_gb)
+        summary += process(job, no_keep_gaps, mcap, cleanup_after, num_workers, start_from, batch_size, spare_gb,
+            n_mosaic, mp4_jobs)
 
     print("\n============= summary =============")
     for name, status, failed, plan_yield, minutes in summary:

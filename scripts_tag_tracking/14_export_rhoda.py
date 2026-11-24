@@ -91,18 +91,75 @@ def read_mcap(path: str) -> dict:
     return out
 
 
-def write_video(frames: list, fps: float, out_path: str, keep_parameter_sets: bool):
+def write_video(frames, fps: float, out_path: str, keep_parameter_sets: bool):
     """
-    H.265 Annex B frames (MCAP video messages) into an mp4 by ffmpeg stream copy, constant fps.
-    The parameter sets go into the file header (hvc1) unless keep_parameter_sets (video spliced
-    from two encodings, --exact_start MCAPs: they stay in the stream, tag hev1).
+    H.265 Annex B frames ((index or time, data), e.g. MCAP video messages) into an mp4 by ffmpeg
+    stream copy, constant fps; streamed, not held in memory. The parameter sets go into the file
+    header (hvc1) unless keep_parameter_sets (video spliced from two encodings: they stay in the
+    stream, tag hev1).
     """
     rate = Fraction(fps).limit_denominator(1001)
     bsf = [] if keep_parameter_sets else ['-bsf:v', 'filter_units=remove_types=32|33|34']
     tag = 'hev1' if keep_parameter_sets else 'hvc1'
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'hevc', '-framerate', f"{rate.numerator}/{rate.denominator}",
+    p = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-f', 'hevc', '-framerate', f"{rate.numerator}/{rate.denominator}",
         '-i', 'pipe:0', '-c', 'copy', *bsf, '-tag:v', tag, '-movflags', '+faststart', str(out_path)],
-        input=b''.join(data for _, data in frames), check=True, capture_output=True)
+        stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        for _, data in frames:
+            p.stdin.write(data)
+        p.stdin.close()
+    except BrokenPipeError:
+        pass
+    err = p.stderr.read()
+    if p.wait() != 0:
+        raise subprocess.CalledProcessError(p.returncode, 'ffmpeg', stderr=err)
+
+
+CAMERA_KEYS = ('model', 'lens', 'fov_horizontal_deg', 'fov_vertical_deg', 'fov_diagonal_deg', 'resolution',
+    'frame_rate_hz', 'intrinsics_model', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4')
+
+
+def write_widths_and_meta(folder: pathlib.Path, rec: str, files: dict, widths: dict, cameras: dict, sync_method):
+    """
+    The recording's gripper CSVs (<rec>_<side>_gripper.csv: frame, width_m, frame i = episode step i)
+    and <rec>_meta.json. files: role (head / left / right) -> mp4 name; widths: side -> width per
+    frame; cameras: role -> camera record (07's camera{j} metadata, only CAMERA_KEYS kept).
+    """
+    for side in ROBOT_SIDES:
+        if side not in files or side not in widths:
+            continue
+        with folder.joinpath(f"{rec}_{side}_gripper.csv").open('w', newline='') as f:
+            w = csv.writer(f, lineterminator='\n')
+            w.writerow(['frame', 'width_m'])
+            for frame, width in enumerate(widths[side]):
+                w.writerow([frame, f"{width:.5f}"])
+    roles_order = [r for r in ('head', 'left', 'right') if r in files]
+    meta = {
+        'files': {r: files[r] for r in roles_order},
+        'cameras': {r: {k: cameras[r][k] for k in CAMERA_KEYS if k in cameras[r]} for r in roles_order
+            if r in cameras} or None,
+        'sync': {
+            'method': sync_method,
+            'event': "the episode's first step: frame 0 of every file (all files start at it, same frame count)",
+            'frame_index': {r: 0 for r in roles_order},
+        },
+        'gripper_width': {side: f"{rec}_{side}_gripper.csv" for side in ROBOT_SIDES if side in files and side in widths},
+    }
+    folder.joinpath(f"{rec}_meta.json").write_text(json.dumps(meta, indent=2))
+
+
+def upload_recording(folder: pathlib.Path, target: str):
+    """
+    A recording folder to target (s3:// prefix of the recording), meta.json last (a recording with
+    meta.json on S3 is complete), every file's size checked.
+    """
+    names = sorted(p.name for p in folder.iterdir())
+    names = [n for n in names if not n.endswith('_meta.json')] + [n for n in names if n.endswith('_meta.json')]
+    for name in names:
+        url = f"{target}/{name}"
+        subprocess.run(['aws', 's3', 'cp', str(folder.joinpath(name)), url, '--only-show-errors'],
+            check=True, capture_output=True)
+        assert s3_size(url) == folder.joinpath(name).stat().st_size, f"{url}: uploaded size differs"
 
 
 def mosaic(head: tuple, right: tuple, left: tuple, n_frames: int, out_path: str, fps: float,
@@ -170,36 +227,15 @@ def export_mcap(path: str, rec: str, out_dir: pathlib.Path, threads: int = 0, fo
         write_video(cut, float(rate), str(out), keep_parameter_sets=exact or reencoded[role])
         files[role] = out.name
 
-    roles_order = [r for r in ('head', 'left', 'right') if r in files]
-
     # gripper width per frame of that gripper's own video file (robot0 right wrist, robot1 left wrist):
     # frame i = episode step i
+    widths = dict()
     for g, side in enumerate(ROBOT_SIDES):
-        if side not in files or g not in data['width']:
-            continue
-        widths = data['width'][g]
-        assert sorted(widths) == steps, f"{path}: robot{g} gripper widths not at the episode steps"
-        with folder.joinpath(f"{rec}_{side}_gripper.csv").open('w', newline='') as f:
-            w = csv.writer(f, lineterminator='\n')
-            w.writerow(['frame', 'width_m'])
-            for frame, t in enumerate(steps):
-                w.writerow([frame, f"{widths[t]:.5f}"])
-
-    camera_keys = ('model', 'lens', 'fov_horizontal_deg', 'fov_vertical_deg', 'fov_diagonal_deg', 'resolution',
-        'frame_rate_hz', 'intrinsics_model', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4')
-    cameras = {role_of(k): {key: v[key] for key in camera_keys if key in v}
-        for k, v in data['metadata'].items() if k.startswith('camera') and k[6:].isdigit()}
-    meta = {
-        'files': {r: files[r] for r in roles_order},
-        'cameras': {r: cameras[r] for r in roles_order if r in cameras} or None,
-        'sync': {
-            'method': data['metadata'].get('sync', {}).get('method'),
-            'event': "the episode's first step: frame 0 of every file (all files start at it, same frame count)",
-            'frame_index': {r: 0 for r in roles_order},
-        },
-        'gripper_width': {side: f"{rec}_{side}_gripper.csv" for side in ROBOT_SIDES if side in files},
-    }
-    folder.joinpath(f"{rec}_meta.json").write_text(json.dumps(meta, indent=2))
+        if g in data['width']:
+            assert sorted(data['width'][g]) == steps, f"{path}: robot{g} gripper widths not at the episode steps"
+            widths[side] = [data['width'][g][t] for t in steps]
+    cameras = {role_of(k): v for k, v in data['metadata'].items() if k.startswith('camera') and k[6:].isdigit()}
+    write_widths_and_meta(folder, rec, files, widths, cameras, data['metadata'].get('sync', {}).get('method'))
     return {'recording': rec, 'folder': folder, 'files': files, 'sync_index': {r: 0 for r in files}, 'n_frames': n, 'reencoded': reencoded,
         'fps': fps}
 
@@ -272,8 +308,8 @@ def check_outputs(folder: pathlib.Path, rec: str, r: dict, with_mosaic: bool):
         path = folder.joinpath(f"{rec}_{side}_gripper.csv")
         if side in r['files'] and path.is_file():
             rows = list(csv.reader(path.open()))[1:]
-            if len(rows) != n or any(len(row) < 2 or row[1] == '' for row in rows):
-                raise OutputCheckError(f"{path.name}: {len(rows)} rows, {n} expected, or empty widths")
+            if len(rows) != n or any(len(row) < 2 or row[1] in ('', 'nan') for row in rows):
+                raise OutputCheckError(f"{path.name}: {len(rows)} rows, {n} expected, or widths missing")
     meta = json.loads(folder.joinpath(f"{rec}_meta.json").read_text())
     if set(meta['files']) != set(r['files']) or any(v != 0 for v in meta['sync']['frame_index'].values()):
         raise OutputCheckError("meta.json: files or sync frame index wrong")
@@ -331,13 +367,7 @@ def export_one(path: str, task: str, output: str, workdir: pathlib.Path, make_mo
         check_outputs(folder, rec, r, with_mosaic)
         if s3_out:
             stage = 'upload'
-            names = sorted(p.name for p in folder.iterdir())
-            names = [n for n in names if not n.endswith('_meta.json')] + [n for n in names if n.endswith('_meta.json')]
-            for name in names:              # meta.json last: a recording with meta.json on S3 is complete
-                url = f"{target}/{name}"
-                subprocess.run(['aws', 's3', 'cp', str(folder.joinpath(name)), url, '--only-show-errors'],
-                    check=True, capture_output=True)
-                assert s3_size(url) == folder.joinpath(name).stat().st_size, f"{url}: uploaded size differs"
+            upload_recording(folder, target)
         ok = True
         return {**entry, 'status': 'ok', 'frames': r['n_frames'], 'mosaic': with_mosaic}
     except Exception as e:

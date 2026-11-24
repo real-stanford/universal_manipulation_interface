@@ -33,6 +33,10 @@ interval (task_start / task_end, 03t_trim_docking.py: docking removed) if presen
   (per gripper, every step). Such plans are for the per-frame deliveries
   (07_export_mcap.py writes no pose message there), not for
   07_generate_replay_buffer.py.
+--ignore_poses (episode videos only, 15_export_episode_videos.py; run_tag_tracking_pipeline.py
+--videos_only, without fuse_grippers): every episode is kept whole, whatever its poses (no pose
+based trimming or dropping); its frame ranges per camera (wrist clocks as above) and gripper widths
+are what is used, the poses are not.
 Grippers are ordered by robot_index; cameras are the grippers' wrist
 cameras in that order, then optionally the head camera.
 
@@ -130,7 +134,10 @@ def bridged_gaps(times, is_valid, query_times):
     help='Episodes: trim invalid steps at the start / end, at most this long per side (s)')
 @click.option('-kg', '--keep_gaps', is_flag=True, default=False,
     help='Episodes: keep episodes with tracking gaps over max_gap_sec inside, pose not available (NaN) there')
-def main(input, config, output, wrist_sync, reference, min_episode_length, no_head_camera, max_trim_sec, keep_gaps):
+@click.option('-ip', '--ignore_poses', is_flag=True, default=False,
+    help='Episode videos only: keep every episode whole whatever its poses (frame ranges and widths are used)')
+def main(input, config, output, wrist_sync, reference, min_episode_length, no_head_camera, max_trim_sec, keep_gaps,
+        ignore_poses):
     session = pathlib.Path(os.path.expanduser(input)).absolute()
     if output is None:
         output = session.joinpath('dataset_plan.pkl')
@@ -268,6 +275,8 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 gripper_widths.append(width_interpolators[-1](demo_timestamps))
 
             is_step_valid = np.all(is_valid, axis=0)
+            if ignore_poses:                  # episode videos only: every step counts
+                is_step_valid = np.ones(n_frames, dtype=bool)
             print(f"{head['name']}: {n_frames} frames, valid poses "
                 + ', '.join(f"{name} {v.mean() * 100:.0f}%" for (_, name), v in zip(gripper_bodies, is_valid))
                 + f", all grippers {is_step_valid.mean() * 100:.0f}%")
@@ -356,7 +365,7 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
                 poses, valids = zip(*[interpolate_valid_poses(*pose_inputs[g], times, max_gap_sec)
                     for g in range(len(gripper_bodies))])
                 widths = [width_interpolators[g](times) for g in range(len(gripper_bodies))]
-                valid = np.all(valids, axis=0)
+                valid = np.ones(len(times), dtype=bool) if ignore_poses else np.all(valids, axis=0)
                 if not valid.all():
                     # the shift (a few ms) can move an edge step out of a tracked stretch: trim it
                     # (with keep_gaps, gaps inside stay: pose not available there)

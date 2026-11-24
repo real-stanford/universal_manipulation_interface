@@ -583,6 +583,32 @@ Input: one MCAP, a folder or `s3://` prefix with MCAPs below it, or the paths CS
 | `<rec>_right_gripper.csv`, `_left_gripper.csv` | gripper width per frame: `frame` (index in every file of the recording), `width_m` (0 = fully closed) |
 | `<rec>_mosaic.mp4` | optional review video (`--mosaic N` recordings per task folder, or `--mosaic_files`): head on top, left wrist bottom left, right wrist bottom right, frame by frame at the cameras' frame rate (every frame); H.264 yuv420p; the only part that decodes and encodes (`--mosaic_encoder h264_nvenc` on a GPU) |
 
+### 8. Episode videos only (no poses, no MCAP files)
+
+The same delivery as section 7 (three mp4s, gripper CSVs and meta.json per episode, optional mosaic,
+report.json per task, the same checks and folder layout), straight from the sessions' GoPro videos.
+The pipeline runs only what the episodes, their sync and the gripper widths need:
+
+| Runs | Skipped |
+|---|---|
+| sort_videos, imu, wrist_tags, gripper_range (gripper width), audio_sync, head_tags, segment_episodes, use_setup, track_bodies and fuse_head_imu (the head tracking of the cubes the motion sync measures from), trim_docking, sync_wrists (motion sync) | fuse_grippers (gripper poses), render, the MCAP export |
+
+The plan (`06_export_dataset_plan.py --ignore_poses`) keeps every episode whole whatever its poses:
+each camera's frame range (audio sync + motion sync correction) and the gripper widths are what is
+used. One station day, every task, to S3:
+
+```
+python scripts_tag_tracking/process_station.py s3://my-bucket/UMI_Collection/station3/industrial_data/2026-11-22 -c example/tag_tracking/tag_tracking_station3.yaml -w ~/umi_data/station3/2026-11-22 --videos_only --mp4 s3://my-bucket/umi_data/industrial_data_mp4 --mosaic 1000 --cleanup
+```
+
+Output: `<mp4>/station3/2026-11-22/<task>/episode_NNNNNN/2026-11-22_<task>_episode_NNNNNN_head.mp4`, ...
+and `<mp4>/station3/2026-11-22/<task>/report.json`. One session by hand:
+
+```
+python run_tag_tracking_pipeline.py -c <config> -nr --videos_only <session>
+python scripts_tag_tracking/15_export_episode_videos.py -i <session> -c <config> --task station3/2026-11-22/task01 -o s3://my-bucket/umi_data/industrial_data_mp4 -w ~/umi_data_mp4 -j 4 --mosaic 1000
+```
+
 ## Frame sync check
 
 `check_frame_sync.py` checks the exported frame timestamps against the cameras' own images,
