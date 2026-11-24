@@ -273,14 +273,18 @@ def track_rigid_body(camera: FisheyeCamera, frames: List[dict],
                     None if motions[i] is None else motions[i][tag_id]))
             values = gtsam.Values()
             values.insert(X(0), gtsam.Pose3(T_init[i]))
-            result = gtsam.LevenbergMarquardtOptimizer(graph, values).optimize()
-            T = result.atPose3(X(0)).matrix()
-            chi2 = sum(np.sum(np.square(tag_observation_residual(camera, T, T_body_tags[k],
-                tag_sizes[k], o['corners'], None if motions[i] is None else motions[i][k]))) / o['sigma'] ** 2
-                for k, o in obs.items())
-            dof = 8 * len(obs) - 6
-            variance_factor = chi2 / dof
-            covariance = gtsam.Marginals(graph, result).marginalCovariance(X(0)) * max(variance_factor, 1.0)
+            try:
+                result = gtsam.LevenbergMarquardtOptimizer(graph, values).optimize()
+                T = result.atPose3(X(0)).matrix()
+                chi2 = sum(np.sum(np.square(tag_observation_residual(camera, T, T_body_tags[k],
+                    tag_sizes[k], o['corners'], None if motions[i] is None else motions[i][k]))) / o['sigma'] ** 2
+                    for k, o in obs.items())
+                dof = 8 * len(obs) - 6
+                variance_factor = chi2 / dof
+                covariance = gtsam.Marginals(graph, result).marginalCovariance(X(0)) * max(variance_factor, 1.0)
+            except RuntimeError:
+                # degenerate solution (e.g. tag corners behind the camera): this frame is not estimated
+                continue
             out['T_cam_body'][i] = T
             out['covariance'][i] = covariance
             out['position_std'][i], out['rotation_std'][i] = pose_std(T, covariance)

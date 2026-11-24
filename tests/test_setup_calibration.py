@@ -126,7 +126,42 @@ def test_parallel_tracking_identical(executor):
             assert np.allclose(full[k], chunked[k], equal_nan=True, atol=1e-9), k
 
 
+def test_tracking_degenerate_frame():
+    # a frame whose pose has no covariance (GTSAM: indeterminant system) is left not estimated,
+    # the other frames are tracked as before (instead of the whole tracking failing)
+    import gtsam
+    from umi.tag_tracking import rigid_body
+    T_env_tags, T_cube_tags, _, sizes, _, head_frames, _, _ = make_scene()
+    noise = TagNoiseModel(0.0, {k: 0.3 for k in sizes})
+    frames = head_frames[:100]
+    full = rigid_body.track_rigid_body(CAMERA, frames, T_cube_tags, sizes, noise, 0.0)
+    real = gtsam.Marginals
+    calls = {'n': 0}
+
+    class Failing:
+        def __init__(self, graph, result):
+            calls['n'] += 1
+            self.fail = calls['n'] % 25 == 0
+            self.marginals = None if self.fail else real(graph, result)
+
+        def marginalCovariance(self, key):
+            if self.fail:
+                raise RuntimeError('Indeterminant linear system detected while working near variable x0')
+            return self.marginals.marginalCovariance(key)
+    gtsam.Marginals = Failing
+    try:
+        out = rigid_body.track_rigid_body(CAMERA, frames, T_cube_tags, sizes, noise, 0.0)
+    finally:
+        gtsam.Marginals = real
+    estimated = ~np.isnan(full['T_cam_body'][:, 0, 0])
+    dropped = estimated & np.isnan(out['T_cam_body'][:, 0, 0])
+    assert dropped.sum() == calls['n'] // 25 > 0, (dropped.sum(), calls['n'])
+    kept = estimated & ~dropped
+    assert np.allclose(full['T_cam_body'][kept], out['T_cam_body'][kept]), 'other frames changed'
+
+
 def test():
+    test_tracking_degenerate_frame()
     test_frames_with_neighbors()
     test_select_cube_frames()
     test_robust_mean_and_tcp()
