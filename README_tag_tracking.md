@@ -609,6 +609,28 @@ python run_tag_tracking_pipeline.py -c <config> -nr --videos_only <session>
 python scripts_tag_tracking/15_export_episode_videos.py -i <session> -c <config> --task station3/2026-11-22/task01 -o s3://my-bucket/umi_data/industrial_data_mp4 -w ~/umi_data_mp4 -j 4 --mosaic 1000
 ```
 
+### Yield: hours recorded, in tasks, in MCAP episodes, and where the rest went
+
+From S3 only: the uploaded day folders (MP4 headers), the sessions' `pairs.csv` and the episode
+MCAP files (each placed into its session's takes by its own clock).
+
+```
+python scripts_tag_tracking/report_yield.py --raw s3://my-bucket/upload_ingestion/GoPro/UMI_Collection --mcap s3://my-bucket/umi_data/industrial_data -o ~/yield/yield [--stations station1,station3] [--notes notes.csv]
+```
+
+- `<output>_days.csv` (station, day): recorded hours, in tasks, and not in a task: a camera missing,
+  gripper calibration / head mapping clips, other short clips, complete takes outside every task,
+  and the time the cameras did not all record during a take;
+- `<output>_tasks.csv` (session): take hours, MCAP episodes and hours (and without pose gaps), the
+  take time between episodes (gaps up to `--gap_sec`, 30 s: docking / idle) and in longer gaps
+  (episodes dropped, or no task done), sessions without MCAP files, and MCAP files in the folder
+  that are not from its takes (another day's episodes);
+- a funnel per station and in total.
+
+Why a session has no MCAP files, or why episodes were dropped, is in its processing logs:
+`process_station.py` copies each session's `logs/` to S3 next to its output (from now on);
+`--notes` (CSV `station,session,note`) adds reasons that are not on S3.
+
 ## Frame sync check
 
 `check_frame_sync.py` checks the exported frame timestamps against the cameras' own images,

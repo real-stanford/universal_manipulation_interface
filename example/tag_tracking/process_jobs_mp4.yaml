@@ -1,0 +1,22 @@
+# Episode videos (--videos_only --mp4) of the sessions without MCAP files, one job after the other:
+# python scripts_tag_tracking/process_station.py --jobs example/tag_tracking/process_jobs_mp4.yaml \
+#     --videos_only --mp4 s3://prod-mono-pipeline-v2-data/umi_data/industrial_data_mp4 --mosaic 1000 --cleanup
+# Per job: sessions (the folder with the task folders), config, workdir (local, one per job: task names
+# repeat across days), tasks, date (sessions without a date in their path: their recording day, for the
+# output folders <mp4>/<station>/<date>/<task>/).
+- sessions: s3://prod-mono-pipeline-v2-data/upload_ingestion/GoPro/UMI_Collection/station1/industrial_data_2026-11-22
+  config: example/tag_tracking/tag_tracking_station1.yaml
+  workdir: ~/umi_data/mp4_jobs/station1_2026-11-22
+  tasks: [task06]
+- sessions: s3://prod-mono-pipeline-v2-data/upload_ingestion/GoPro/UMI_Collection/station2/industrial_data_2026-11-22
+  config: example/tag_tracking/tag_tracking_station2.yaml
+  workdir: ~/umi_data/mp4_jobs/station2_2026-11-22
+  tasks: [task05]
+- sessions: s3://prod-mono-pipeline-v2-data/upload_ingestion/GoPro/UMI_Collection/station3/industrial_data/2026-11-21
+  config: example/tag_tracking/tag_tracking_station3.yaml
+  workdir: ~/umi_data/mp4_jobs/station3_2026-11-21
+  tasks: [task02, task03]
+- sessions: s3://prod-mono-pipeline-v2-data/upload_ingestion/GoPro/UMI_Collection/station3/industrial_data/2026-11-22
+  config: example/tag_tracking/tag_tracking_station3.yaml
+  workdir: ~/umi_data/mp4_jobs/station3_2026-11-22
+  tasks: [task01, task04]
