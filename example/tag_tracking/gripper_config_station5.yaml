@@ -1,0 +1,21 @@
+# Gripper config for station5. NOT read from the videos yet: finger tag ids are station2's layout
+# (right gripper 1 / 0, left gripper 7 / 6), to be confirmed by scripts_tag_tracking/propose_station_config.py
+# on a station5 session (it reads the finger tags from the gripper calibration videos).
+# TCP 192 mm in front of the lens (tcp_offset + cam_to_mount_offset), 75 mm below its center: not measured for these grippers.
+# right hand: camera C3501326383059 (S3 folder right/ on 2026-11-24)
+# left hand: camera C3501326505698 (S3 folder left/ on 2026-11-24)
+nominal_z: 0.079
+cam_to_center_height: 0.075
+cam_to_mount_offset: 0.01465
+tcp_offset: 0.17735
+grippers:
+  C3501326383059:
+    gripper_id: 0
+    left_finger_tag_id: 1
+    right_finger_tag_id: 0
+    finger_tag_to_tip: 0.113
+  C3501326505698:
+    gripper_id: 1
+    left_finger_tag_id: 7
+    right_finger_tag_id: 6
+    finger_tag_to_tip: 0.113

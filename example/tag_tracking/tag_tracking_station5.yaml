@@ -1,0 +1,84 @@
+# Tag tracking config for station5, written 2026-11-25 from tag_tracking_station2.yaml.
+# Measured for station5: cameras / head_imu / gripper_imu (station5_head / _left / _right imported 2026-11-25;
+# camera-IMU translations not estimated by OpenICC (too little rotation), set near the HERO12 mean).
+# cameras: head C3501326499367, right C3501326383059, left C3501326505698 (S3 folders on 2026-11-24)
+# NOT read from the videos yet, station2's layout to be confirmed by propose_station_config.py on a
+# station5 session: environment tags, cube tags, which cube is on which gripper, dock tags (and the finger
+# tags in gripper_config_station5.yaml).
+aruco_config: aruco_config.yaml
+corner_noise: corner_noise.json
+gripper_config: gripper_config_station5.yaml
+head_camera: C3501326499367
+# setup_calibration: none yet (calibrate_setup.py on a station5 session -> setup_station5);
+# until then each session calibrates its bodies and TCPs from its own head mapping
+head_imu:
+  cam_imu_calibration: openicc/station5_head/cam_imu/cam_imu_calib_result_GX010634.json
+  noise_setting: gopro12_wide_fisheye_setting_720_C3501326499367.yaml
+  imu_time_offset: gpmf
+gripper_imu:
+  C3501326383059:   # right hand
+    cam_imu_calibration: openicc/station5_right/cam_imu/cam_imu_calib_result_GX010214.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326383059.yaml
+    imu_time_offset: gpmf
+  C3501326505698:   # left hand
+    cam_imu_calibration: openicc/station5_left/cam_imu/cam_imu_calib_result_GX010377.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326505698.yaml
+    imu_time_offset: gpmf
+accuracy:
+  position_std: 0.0061
+  rotation_std: 3.5
+cameras:
+  C3501326499367: openicc/station5_head/cam/cam_calib_GX010631_fi_1.0.json
+  C3501326383059: openicc/station5_right/cam/cam_calib_GX010211_fi_1.0.json
+  C3501326505698: openicc/station5_left/cam/cam_calib_GX010374_fi_1.0.json
+bodies:
+  environment:
+    static: true
+    tags:
+    - 14
+    - 15
+    - 16
+    - 17
+    - 20
+    - 21
+    - 32
+    - 33
+    - 34
+  right_cube:
+    tags:
+    - 2
+    - 3
+    - 4
+    - 5
+    gripper_camera: C3501326383059
+    robot_index: 0
+  left_cube:
+    tags:
+    - 8
+    - 9
+    - 10
+    - 11
+    gripper_camera: C3501326505698
+    robot_index: 1
+episodes:
+  dock_tags:
+  - 15
+  - 16
+  boundary: dock
+  dock_exit_distance: 0.45
+  still_sec: 1.0
+  gyro_still: 0.04
+  dock_distance: 0.35
+  min_dock_frames: 15
+  bang_accel: 5.0
+  bang_tolerance: 0.02
+  bang_search_tolerance: 0.06
+  bang_merge_sec: 0.5
+  audio_ratio: 5.0
+  audio_tolerance: 0.015
+  audio_lag_search: 0.3
+  lag_accel: 10.0
+  dock_window: 0.25
+  idle_margin: 1.0
+  min_episode_sec: 3.0
+  max_gap_sec: 0.25
