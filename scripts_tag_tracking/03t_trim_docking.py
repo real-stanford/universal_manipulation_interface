@@ -78,7 +78,8 @@ def main(input, config, bang_ritual):
     data = json.load(episodes_path.open('r'))
 
     videos = get_session_videos(session)
-    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera'] and x['name'] in data['videos']]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         # head video time spans recorded by each gripper's wrist camera(s)
         wrist_spans = [[(w['start_timestamp'] - head['start_timestamp'], w['end_timestamp'] - head['start_timestamp'])

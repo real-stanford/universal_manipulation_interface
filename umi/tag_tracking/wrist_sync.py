@@ -222,6 +222,9 @@ def fit_readout(samples: Sequence[Tuple[str, float, float, float]], n_sigma: flo
         if np.array_equal(new_keep, keep):
             break
         keep = new_keep
+    if np.linalg.matrix_rank(A[keep]) < A.shape[1]:
+        # too few episodes kept, or no spread of cube rows: readout not observable
+        return None
     dof = max(int(keep.sum()) - A.shape[1], 1)
     covariance = np.sum(residual[keep] ** 2) / dof * np.linalg.inv(A[keep].T @ A[keep])
     return {'readout_ms': float(x[-1]), 'sigma_ms': float(np.sqrt(covariance[-1, -1])),

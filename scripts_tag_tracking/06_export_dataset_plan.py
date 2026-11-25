@@ -103,7 +103,7 @@ def interpolate_valid_poses(times, poses, is_valid, query_times, max_gap_sec=Non
         inside = (idx > 0) & (idx < len(valid_times))
         query_valid[inside] = (valid_times[idx[inside]] - valid_times[idx[inside] - 1]) <= max_gap_sec
     out = np.full((len(query_times), 6), np.nan)
-    if is_valid.sum() >= 2:
+    if is_valid.sum() >= 2 and query_valid.any():
         interp = PoseInterpolator(times[is_valid], mat_to_pose(poses[is_valid]))
         out[query_valid] = interp(query_times[query_valid])
     return out, query_valid
@@ -166,7 +166,9 @@ def main(input, config, output, wrist_sync, reference, min_episode_length, no_he
     total_time = 0.0
     used_time = 0.0
     bridge_stats = [{'steps': 0, 'bridged': 0, 'longest': 0.0, 'missing': 0} for _ in gripper_bodies]
-    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera']
+            and (episodes is None or x['name'] in episodes)]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         head_times = head['start_timestamp'] + track['time']
         corrections = wrist_corrections(sync, head['name'])

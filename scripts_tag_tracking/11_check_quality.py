@@ -90,7 +90,8 @@ def main(input, config, jobs):
     result = {'parameters': quality.DEFAULTS, 'videos': media, 'episodes': dict(),
         'created_ts_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
     counts = {'pass': 0, 'warn': 0, 'fail': 0}
-    for head in heads:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in heads if x['name'] in episodes_json]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         corrections = wrist_corrections(sync, head['name'])
         grippers = gripper_streams(session, config, videos, head, track, tcp, corrections)

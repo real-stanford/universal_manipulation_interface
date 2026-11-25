@@ -133,6 +133,10 @@ def main(input, config):
     results = dict()
     for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
         gripper_wrists = [overlapping(videos, head, serial) for serial in inputs['serials']]
+        if any(len(w) == 0 for w in gripper_wrists):
+            # e.g. a short false start recorded by the head camera only: no episodes to segment
+            print(f"WARNING skipped {head['name']}: no wrist video of every gripper overlaps it")
+            continue
         result = segment_take(head, gripper_wrists, inputs['cube_tags'], inputs['dock_tags'],
             config['tag_sizes'], config['cameras'][config['head_camera']], params)
         result.pop('diagnostics')

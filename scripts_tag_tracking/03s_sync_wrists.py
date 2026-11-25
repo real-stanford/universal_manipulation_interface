@@ -72,7 +72,8 @@ def main(input, config, output, readout_ms, interval_frames, search_ms):
     line_delay = json.load(session.joinpath('tag_tracking', 'bodies.json').open('r'))['line_delay']
 
     out = {'parameters': params, 'videos': dict(), 'readout': dict(), 'pairs': dict()}
-    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera'] and x['name'] in episodes]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         times = track['time']
         head_episodes = episodes[head['name']]['episodes']

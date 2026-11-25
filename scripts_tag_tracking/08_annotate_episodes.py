@@ -159,7 +159,8 @@ def main(input, config, output, episodes, task_prompt, model, effort, max_frames
         client = anthropic.Anthropic()
     usage = {'input_tokens': 0, 'output_tokens': 0, 'episodes': 0}
 
-    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera'] and x['name'] in episodes_json]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         corrections = wrist_corrections(sync, head['name'])
         grippers = gripper_streams(session, config, videos, head, track, tcp, corrections)

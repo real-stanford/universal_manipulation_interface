@@ -67,7 +67,8 @@ def main(input, config):
     head_camera = config['cameras'][config['head_camera']]
     height = head_camera.image_size[1]
 
-    for head in [x for x in videos if x['camera_serial'] == config['head_camera']]:
+    # head videos 00b_segment_episodes.py skipped (no wrist video overlapping) have no episodes
+    for head in [x for x in videos if x['camera_serial'] == config['head_camera'] and x['name'] in episodes]:
         track = pickle.load(head['dir'].joinpath('tag_tracking.pkl').open('rb'))
         corrections = wrist_corrections(sync, head['name'])
         grippers = gripper_streams(session, config, videos, head, track, tcp, corrections)
