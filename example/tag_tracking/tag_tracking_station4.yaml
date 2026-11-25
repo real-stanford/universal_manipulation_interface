@@ -1,0 +1,69 @@
+# Tag tracking config for station4, written 2026-11-25 from tag_tracking_station5.yaml (episode / accuracy settings).
+# Cameras / head_imu / gripper_imu: station4_head / _left / _right (OpenICC, imported 2026-11-25): head and right
+# camera-IMU translation near the HERO12 mean (not estimated), left measured; head camera-IMU rotation = mean of 7
+# good HERO12 calibrations (its estimate 6.1 deg off).
+# Read by propose_station_config.py from session task01 2026-11-24 (gripper calibration GX010979 / GX011294,
+# head mapping GX010997, first 180 s of 2 takes):
+# cameras: head C3501326498323, right C3501326495531, left C3501326500502
+# right finger tags 6 (image left) / 7 (image right); left finger tags 0 (image left) / 1 (image right)
+# cubes [2, 3, 4, 5] and [8, 9, 10, 11]; right wrist sees cube [2, 3, 4, 5] 15%, left wrist sees [8, 9, 10, 11] 7%:
+# cube [8, 9, 10, 11] on the right gripper, [2, 3, 4, 5] on the left
+# head mapping: environment tags [17, 20, 22, 26, 27, 28, 29, 32, 33, 34, 35]
+# docked: 40 head frames; right cube closest to 29 85% / 28 15%, left cube 28 65% / 29 35%: dock tags [28, 29]
+aruco_config: aruco_config.yaml
+corner_noise: corner_noise.json
+gripper_config: gripper_config_station4.yaml
+head_camera: C3501326498323
+# setup_calibration: none yet (calibrate_setup.py on task01 2026-11-24 -> setup_station4)
+head_imu:
+  cam_imu_calibration: openicc/station4_head/cam_imu/cam_imu_calib_result_GX011039.json
+  noise_setting: gopro12_wide_fisheye_setting_720_C3501326498323.yaml
+  imu_time_offset: gpmf
+gripper_imu:
+  C3501326495531:   # right hand
+    cam_imu_calibration: openicc/station4_right/cam_imu/cam_imu_calib_result_GX011047.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326495531.yaml
+    imu_time_offset: gpmf
+  C3501326500502:   # left hand
+    cam_imu_calibration: openicc/station4_left/cam_imu/cam_imu_calib_result_GX011337.json
+    noise_setting: gopro12_wide_fisheye_setting_720_C3501326500502.yaml
+    imu_time_offset: gpmf
+accuracy:
+  position_std: 0.0061
+  rotation_std: 3.5
+cameras:
+  C3501326498323: openicc/station4_head/cam/cam_calib_GX011037_fi_1.0.json
+  C3501326495531: openicc/station4_right/cam/cam_calib_GX011045_fi_1.0.json
+  C3501326500502: openicc/station4_left/cam/cam_calib_GX011333_fi_1.0.json
+bodies:
+  environment:
+    static: true
+    tags: [17, 20, 22, 26, 27, 28, 29, 32, 33, 34, 35]
+  right_cube:
+    tags: [8, 9, 10, 11]
+    gripper_camera: C3501326495531
+    robot_index: 0
+  left_cube:
+    tags: [2, 3, 4, 5]
+    gripper_camera: C3501326500502
+    robot_index: 1
+episodes:
+  dock_tags: [28, 29]
+  boundary: dock
+  dock_exit_distance: 0.45
+  still_sec: 1.0
+  gyro_still: 0.04
+  dock_distance: 0.35
+  min_dock_frames: 15
+  bang_accel: 5.0
+  bang_tolerance: 0.02
+  bang_search_tolerance: 0.06
+  bang_merge_sec: 0.5
+  audio_ratio: 5.0
+  audio_tolerance: 0.015
+  audio_lag_search: 0.3
+  lag_accel: 10.0
+  dock_window: 0.25
+  idle_margin: 1.0
+  min_episode_sec: 3.0
+  max_gap_sec: 0.25

@@ -1,0 +1,20 @@
+# Gripper config for station4. Finger tags (image left / right) read by propose_station_config.py from the
+# 2026-11-24 gripper calibration videos (right GX010979: 6 / 7, left GX011294: 0 / 1).
+# TCP 192 mm in front of the lens (tcp_offset + cam_to_mount_offset), 75 mm below its center: not measured for these grippers.
+# right hand: camera C3501326495531
+# left hand: camera C3501326500502
+nominal_z: 0.079
+cam_to_center_height: 0.075
+cam_to_mount_offset: 0.01465
+tcp_offset: 0.17735
+grippers:
+  C3501326495531:
+    gripper_id: 0
+    left_finger_tag_id: 6
+    right_finger_tag_id: 7
+    finger_tag_to_tip: 0.113
+  C3501326500502:
+    gripper_id: 1
+    left_finger_tag_id: 0
+    right_finger_tag_id: 1
+    finger_tag_to_tip: 0.113
