@@ -1,10 +1,17 @@
-# Tag tracking config for station5, written 2026-11-25 from tag_tracking_station2.yaml.
+# Tag tracking config for station5, written 2026-11-25 from tag_tracking_station2.yaml (episode / accuracy settings).
 # Measured for station5: cameras / head_imu / gripper_imu (station5_head / _left / _right imported 2026-11-25;
 # camera-IMU translations not estimated by OpenICC (too little rotation), set near the HERO12 mean).
-# cameras: head C3501326499367, right C3501326383059, left C3501326505698 (S3 folders on 2026-11-24)
-# NOT read from the videos yet, station2's layout to be confirmed by propose_station_config.py on a
-# station5 session: environment tags, cube tags, which cube is on which gripper, dock tags (and the finger
-# tags in gripper_config_station5.yaml).
+# Read by propose_station_config.py from session task01 2026-11-24 (gripper calibration GX010200 / GX010363,
+# head mapping GX010621, first 180 s of 4 takes):
+# cameras: head C3501326499367, right C3501326383059, left C3501326505698
+# right finger tags 1 (image left) / 0 (image right); left finger tags 6 (image left) / 7 (image right)
+# cubes [2, 3, 4, 5] and [8, 9, 10] (tag 11 seen once, 1.0 sides from 9: added to the 8-10 cube by hand)
+# right wrist sees cube [8, 9, 10] 19%, left wrist sees cube [2, 3, 4, 5] 1%:
+# cube [2, 3, 4, 5] on the right gripper, [8, 9, 10] on the left
+# head mapping: environment tags [38, 39, 40, 41, 46, 47]
+# WARNING head takes show environment-size tags not in the mapping: [44, 45] (not added: not in the map)
+# WARNING tags without a size in the aruco config (ignored): [30]
+# docked: 42 head frames; right cube closest to 47 79% / 46 21%, left cube 46 76% / 47 24%: dock tags [46, 47]
 aruco_config: aruco_config.yaml
 corner_noise: corner_noise.json
 gripper_config: gripper_config_station5.yaml
@@ -35,15 +42,12 @@ bodies:
   environment:
     static: true
     tags:
-    - 14
-    - 15
-    - 16
-    - 17
-    - 20
-    - 21
-    - 32
-    - 33
-    - 34
+    - 38
+    - 39
+    - 40
+    - 41
+    - 46
+    - 47
   right_cube:
     tags:
     - 2
@@ -62,8 +66,8 @@ bodies:
     robot_index: 1
 episodes:
   dock_tags:
-  - 15
-  - 16
+  - 46
+  - 47
   boundary: dock
   dock_exit_distance: 0.45
   still_sec: 1.0
