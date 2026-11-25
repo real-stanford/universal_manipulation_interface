@@ -615,8 +615,13 @@ From S3 only: the uploaded day folders (MP4 headers), the sessions' `pairs.csv` 
 MCAP files (each placed into its session's takes by its own clock).
 
 ```
-python scripts_tag_tracking/report_yield.py --raw s3://my-bucket/upload_ingestion/GoPro/UMI_Collection --mcap s3://my-bucket/umi_data/industrial_data -o ~/yield/yield [--stations station1,station3] [--notes notes.csv]
+python scripts_tag_tracking/report_yield.py --raw s3://my-bucket/upload_ingestion/GoPro/UMI_Collection --mcap s3://my-bucket/umi_data/industrial_data --mp4 s3://my-bucket/umi_data/industrial_data_mp4 -o ~/yield/yield [--stations station1,station3] [--notes notes.csv]
 ```
+
+Sessions without MCAP files but processed with `--videos_only` (episode videos only) are read from
+`--mp4`: their episodes placed from the logs uploaded next to them, delivered hours from `report.json`,
+and every long gap (`<output>_gaps.csv`) with the reason from the logs (dropped episodes and why,
+stretches the segmentation rejected, or no episode found).
 
 - `<output>_days.csv` (station, day): recorded hours, in tasks, and not in a task: a camera missing,
   gripper calibration / head mapping clips, other short clips, complete takes outside every task,

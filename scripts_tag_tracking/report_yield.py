@@ -16,17 +16,23 @@ the episode MCAP files, and where the rest went. From S3 only (the processing lo
    the cameras' timecode against the headers' UTC time, searched within +-14 h); the take time
    outside episodes split into gaps up to --gap_sec (docking and idle between episodes) and longer
    gaps (episodes dropped, or no task done). MCAP files that fit no take of their session (another
-   day's episodes in that folder) are counted apart, not as yield. A session without MCAP files:
-   not processed or failed (the reason is not on S3; --notes adds it).
+   day's episodes in that folder) are counted apart, not as yield.
+   A session without MCAP files but with episode videos (--mp4: <mp4>/<station>/<date>/<task>/report.json,
+   15_export_episode_videos.py) is placed from its processing logs (<...>/logs/: 11_trim_docking.log
+   episodes per head video, 16_export_plan.log dropped episodes and why, 06_segment_episodes.log
+   rejected stretches), delivered hours from report.json; its long gaps get the reason from the logs.
+   A session with neither: not processed or failed (--notes adds the reason).
 
-Output: <output>_days.csv (station, day), <output>_tasks.csv (session), and a funnel per station.
+Output: <output>_days.csv (station, day), <output>_tasks.csv (session), <output>_gaps.csv (every gap
+over --gap_sec in a processed take: its head video file and the time within it, the episodes around
+it, to look at in the video), and a funnel per station.
 Inventories are cached in <output>_inventory/ (rerun without reading the headers again).
 
 --notes: CSV station,session,note (session as in the tasks CSV, e.g. 2026-11-22/task01) for what S3
 does not say, e.g. why a session has no MCAP files.
 
 python scripts_tag_tracking/report_yield.py --raw s3://bucket/upload_ingestion/GoPro/UMI_Collection \\
-    --mcap s3://bucket/umi_data/industrial_data -o ~/yield/yield [--stations station1,station3]
+    --mcap s3://bucket/umi_data/industrial_data [--mp4 s3://bucket/umi_data/industrial_data_mp4] -o ~/yield/yield
 """
 # %%
 import sys
@@ -169,6 +175,131 @@ def match_sessions(session_rows: dict, where: dict, days: list):
     return take_of, clip_of, session_takes, session_day
 
 
+MMSS = r'(\d+):(\d+(?:\.\d+)?)'
+
+
+def seconds(mmss: str) -> float:
+    m, s = mmss.split(':')
+    return int(m) * 60 + float(s)
+
+
+def parse_logs(segment: str, trim: str, plan: str) -> dict:
+    """
+    A session's episodes per head video (demo folder) from its processing logs:
+    06_segment_episodes.log (rejected stretches), 11_trim_docking.log (episodes with their task
+    interval, or no task), 16_export_plan.log (episodes dropped, with the reason; 'N episodes' kept).
+    Times in seconds of the head video. Returns {'heads': {demo: {'episodes': {k: (start, end)},
+    'no_task': {k: (start, end)}, 'dropped': {k: (start, end, reason)}, 'rejected': [(start, end, status)]}},
+    'kept': N from the plan log or None}.
+    """
+    heads = collections.defaultdict(lambda: {'episodes': dict(), 'no_task': dict(), 'dropped': dict(), 'rejected': list()})
+    head = None
+    for line in segment.splitlines():
+        m = re.match(r'^(demo_\S+): \d+ episodes', line)
+        if m:
+            head = m.group(1)
+            continue
+        m = re.match(rf'^\s+rejected {MMSS}-{MMSS}: (.+)$', line)
+        if m and head:
+            heads[head]['rejected'].append((seconds(f"{m.group(1)}:{m.group(2)}"), seconds(f"{m.group(3)}:{m.group(4)}"),
+                m.group(5).strip()))
+    pending = list()                                 # 11_trim_docking: a head's episode lines come before its summary
+    for line in trim.splitlines():
+        m = re.match(rf'^\s+episode (\d+) \S+: task {MMSS}-{MMSS}', line)
+        if m:
+            pending.append(('episodes', int(m.group(1)), seconds(f"{m.group(2)}:{m.group(3)}"),
+                seconds(f"{m.group(4)}:{m.group(5)}")))
+            continue
+        m = re.match(rf'^\s+episode (\d+) {MMSS}-{MMSS}: cubes never left', line)
+        if m:
+            pending.append(('no_task', int(m.group(1)), seconds(f"{m.group(2)}:{m.group(3)}"),
+                seconds(f"{m.group(4)}:{m.group(5)}")))
+            continue
+        m = re.match(r'^(demo_\S+): ', line)
+        if m and pending:
+            for kind, k, a, b in pending:
+                heads[m.group(1)][kind][k] = (a, b)
+            pending = list()
+    kept, head = None, None
+    for line in plan.splitlines():
+        m = re.match(r'^(demo_\S+): \d+ frames, ', line)
+        if m:
+            head = m.group(1)
+            continue
+        m = re.match(r'^\s+episode (\d+) \(([\d.]+)-([\d.]+)s\): dropped, (.+)$', line)
+        if m and head:
+            heads[head]['dropped'][int(m.group(1))] = (float(m.group(2)), float(m.group(3)), m.group(4).strip())
+            continue
+        m = re.match(r'^(\d+) episodes, ', line)
+        if m:
+            kept = int(m.group(1))
+    return {'heads': dict(heads), 'kept': kept}
+
+
+def gap_reasons(gap: tuple, items: list) -> str:
+    """
+    What the logs say about a gap: the dropped / no-task / rejected stretches overlapping it
+    (items: (start, end, reason) on the same clock), counted by reason.
+    """
+    g0, g1 = gap
+    found = collections.Counter(r for a, b, r in items if b > g0 and a < g1)
+    if not found:
+        return 'no episode found (no bangs, or idle)'
+    return '; '.join(f"{r} ({n})" if n > 1 else r for r, n in found.most_common())
+
+
+def read_optional(url: str):
+    out = subprocess.run(['aws', 's3', 'cp', url, '-', '--only-show-errors'], capture_output=True, text=True)
+    return out.stdout if out.returncode == 0 else None
+
+
+def mp4_session(folder: str, heads: list, spans: list, items: list):
+    """
+    A session exported as episode videos only (15_export_episode_videos.py): its episodes placed into
+    the takes from the processing logs in <folder>/logs/ (episodes per head video, in the head video's
+    seconds), delivered hours from <folder>/report.json. heads: per take its head video files (start,
+    duration, file); fills spans (per take (start, end, name) of the kept episodes) and items (per
+    take (start, end, reason) of dropped / no-task / rejected stretches). Returns (episodes delivered,
+    seconds delivered, dropped episodes by reason, status) or None without report.json.
+    """
+    report = read_optional(f"{folder}/report.json")
+    if report is None:
+        return None
+    report = json.loads(report)
+    ok = [e for e in report.get('episodes', []) if e.get('status') == 'ok']
+    seconds_ = sum(e.get('frames', 0) for e in ok) / (60000 / 1001)
+    logs = {k: read_optional(f"{folder}/logs/{k}") or '' for k in
+        ('06_segment_episodes.log', '11_trim_docking.log', '16_export_plan.log')}
+    parsed = parse_logs(logs['06_segment_episodes.log'], logs['11_trim_docking.log'], logs['16_export_plan.log'])
+    # head demo folders (named by their start time) in time order <-> the session's head videos in time order
+    demos = sorted(parsed['heads'], key=lambda d: d.split('_', 2)[-1])
+    videos = sorted((h0, t, f_) for t, hs in enumerate(heads) for h0, _, f_ in hs)
+    if not demos or len(demos) != len(videos):
+        return len(ok), seconds_, '', f"processed (episode videos); logs not matched to the takes ({len(demos)} head " \
+            f"videos in the logs, {len(videos)} in the takes)"
+    counter, number = collections.Counter(), 0
+    for demo, (h0, t, _) in zip(demos, videos):
+        x = parsed['heads'][demo]
+        for k in sorted(x['episodes']):
+            a, b = x['episodes'][k]
+            if k in x['dropped']:
+                counter[x['dropped'][k][2]] += 1
+                items[t].append((h0 + a, h0 + b, f"dropped: {x['dropped'][k][2]}"))
+            else:
+                spans[t].append((h0 + a, h0 + b, f"episode_{number:06d}"))
+                number += 1
+        for k, (a, b) in x['no_task'].items():
+            counter['no task (cubes never left the dock)'] += 1
+            items[t].append((h0 + a, h0 + b, 'no task (cubes never left the dock)'))
+        for a, b, why in x['rejected']:
+            items[t].append((h0 + a, h0 + b, f"segmentation rejected: {why}"))
+    dropped = '; '.join(f"{r}: {n}" for r, n in counter.most_common())
+    status = 'processed (episode videos)'
+    if parsed['kept'] is not None and parsed['kept'] != number:
+        status += f"; logs give {number} kept episodes, the plan {parsed['kept']}"
+    return len(ok), seconds_, dropped, status
+
+
 def mcap_info(path: str, size: int) -> dict:
     """
     An episode MCAP's duration (steps / fps), good (a pose every step) and end time (its last
@@ -229,18 +360,38 @@ def take_gaps(take: tuple, intervals: list, gap_sec: float):
     return covered, short, long_
 
 
+def long_gaps(take: tuple, intervals: list, gap_sec: float) -> list:
+    """
+    (start, end) of the gaps longer than gap_sec in a take (outside the episode intervals).
+    """
+    t0, t1 = take
+    out, cursor = list(), t0
+    for s, e in sorted(intervals):
+        s, e = max(s, t0), min(e, t1)
+        if e <= cursor:
+            continue
+        if s - cursor > gap_sec:
+            out.append((cursor, s))
+        cursor = e
+    if t1 - cursor > gap_sec:
+        out.append((cursor, t1))
+    return out
+
+
 # %%
 @click.command()
 @click.option('--raw', required=True, help='s3:// folder with the stations (UMI_Collection)')
 @click.option('--mcap', required=True, help='s3:// folder with the episode MCAP files (<station>/.../<task>/)')
+@click.option('--mp4', default=None,
+    help='s3:// folder with the episode videos (<station>/<date>/<task>/report.json, logs/): sessions without MCAP files')
 @click.option('-o', '--output', required=True, help='Output prefix: <output>_days.csv, <output>_tasks.csv')
 @click.option('--stations', default=None, help='Comma separated, default all stationN folders')
 @click.option('--gap_sec', type=float, default=30.0, help='Gaps up to this long between episodes: docking / idle')
 @click.option('--take_sec', type=float, default=60.0, help='Shorter recordings are clips (calibration, mapping)')
 @click.option('--notes', default=None, help='CSV station,session,note')
 @click.option('-j', '--jobs', type=int, default=16, help='MCAP files read in parallel')
-def main(raw, mcap, output, stations, gap_sec, take_sec, notes, jobs):
-    raw, mcap = raw.rstrip('/'), mcap.rstrip('/')
+def main(raw, mcap, mp4, output, stations, gap_sec, take_sec, notes, jobs):
+    raw, mcap, mp4 = raw.rstrip('/'), mcap.rstrip('/'), mp4.rstrip('/') if mp4 else None
     output = os.path.expanduser(output)
     cache = pathlib.Path(f"{output}_inventory")
     if stations:
@@ -272,7 +423,7 @@ def main(raw, mcap, output, stations, gap_sec, take_sec, notes, jobs):
     for (k, p, _), info in zip(keys, infos):
         episodes[k].append({**info, 'file': p.rsplit('/', 1)[-1]})
 
-    day_rows, task_rows = list(), list()
+    day_rows, task_rows, gap_rows = list(), list(), list()
     h = lambda s: round(s / 3600, 3)
     for station in stations:
         days = day_folders(raw, station)
@@ -319,11 +470,13 @@ def main(raw, mcap, output, stations, gap_sec, take_sec, notes, jobs):
             takes = [found for found in session_takes[name] if found]
             groups = [[v for k in found for v in recordings[k][1]] for found in takes]
             day = session_day[name]
-            intervals = list()
+            intervals, heads = list(), list()          # per take: (start, end), its head video files
             for g in groups:
                 if all(any(v['folder'] == f for v in g) for f in FOLDERS):
                     s, e = shared_interval(g)
                     intervals.append((s.timestamp(), e.timestamp()))
+                    heads.append(sorted((datetime.datetime.fromisoformat(v['start']).timestamp(), v['duration'],
+                        v['file']) for v in g if v['folder'] == 'head'))
             in_tasks = sum(max(e - s, 0) for s, e in intervals)
             # the session's MCAP folder: <date>/<task>, the date from the session's path or, without one
             # (sorted before the dated layout), from the day folder its files are in
@@ -338,26 +491,56 @@ def main(raw, mcap, output, stations, gap_sec, take_sec, notes, jobs):
                     best = (eps_, offset_, fit_, folder)
             eps, offset, fit, mcap_folder = best
             placed = [e for e, f in zip(eps, fit) if f is not None]
+            # the session's episodes per take: (start, end, name) on the takes' clock, and what the logs say
+            # about the rest ((start, end, reason): dropped, no task, rejected; episode videos only)
+            spans = [list() for _ in intervals]
+            items = [list() for _ in intervals]
+            output_kind, output_folder, n_episodes, episodes_h, no_gaps_h, dropped, status = '', '', 0, 0.0, '', '', ''
+            if placed:
+                for e, f in zip(eps, fit):
+                    if f is not None:
+                        spans[f].append((e['start'] + offset, e['end'] + offset, e['file']))
+                output_kind, output_folder, n_episodes = 'mcap', mcap_folder, len(placed)
+                episodes_h = sum(e['duration'] for e in placed)
+                no_gaps_h = h(sum(e['duration'] for e in placed if e['good']))
+                status = 'processed'
+            elif mp4 and date and intervals:
+                folder = f"{mp4}/{station}/{date.group()}/{task}"
+                result = mp4_session(folder, heads, spans, items)
+                if result is not None:
+                    output_kind, output_folder = 'mp4', f"{date.group()}/{task}"
+                    n_episodes, episodes_h, dropped, status = result
+            if not status:
+                status = 'MCAP files of other recordings only' if eps else 'no MCAP files or episode videos'
+            processed = status in ('processed', 'processed (episode videos)')
             covered, short, long_ = 0.0, 0.0, 0.0
-            for t, take in enumerate(intervals if placed else []):
-                a, b, c_ = take_gaps(take, [(e['start'] + offset, e['end'] + offset) for e, f in zip(eps, fit) if f == t],
-                    gap_sec)
+            for t, take in enumerate(intervals if processed else []):
+                in_take = sorted(spans[t])
+                a, b, c_ = take_gaps(take, [(s_, e_) for s_, e_, _ in in_take], gap_sec)
                 covered, short, long_ = covered + a, short + b, long_ + c_
-            status = 'processed' if placed else ('MCAP files of other recordings only' if eps else 'no MCAP files')
-            task_rows.append({'station': station, 'session': name, 'day': day, 'mcap_folder': mcap_folder if eps else '',
-                'takes': len(intervals),
-                'in_tasks_h': h(in_tasks), 'mcap_episodes': len(placed), 'mcap_h': h(sum(e['duration'] for e in placed)),
-                'mcap_good_h': h(sum(e['duration'] for e in placed if e['good'])),
-                'between_episodes_h': h(short), 'long_gaps_h': h(long_ if placed else 0.0),
-                'not_processed_h': h(0.0 if placed else in_tasks),
+                for g0, g1 in long_gaps(take, [(s_, e_) for s_, e_, _ in in_take], gap_sec):
+                    # where to look: the head video file holding the gap's start, times within that file
+                    h0, _, head_file = next(((h0, d, f_) for h0, d, f_ in reversed(heads[t]) if h0 <= g0 + 1), heads[t][0])
+                    before = [n for s_, e_, n in in_take if e_ <= g0 + 1]
+                    after = [n for s_, e_, n in in_take if s_ >= g1 - 1]
+                    mmss = lambda x: f"{int(x // 60):02d}:{x % 60:04.1f}"
+                    gap_rows.append({'station': station, 'session': name, 'day': day, 'head_video': head_file,
+                        'from': mmss(g0 - h0), 'to': mmss(g1 - h0), 'length_s': round(g1 - g0, 1),
+                        'episode_before': before[-1] if before else '', 'episode_after': after[0] if after else '',
+                        'reason': gap_reasons((g0, g1), items[t]) if output_kind == 'mp4' else ''})
+            task_rows.append({'station': station, 'session': name, 'day': day, 'output': output_kind,
+                'output_folder': output_folder, 'takes': len(intervals), 'in_tasks_h': h(in_tasks),
+                'episodes': n_episodes, 'episodes_h': h(episodes_h), 'episodes_without_pose_gaps_h': no_gaps_h,
+                'between_episodes_h': h(short), 'long_gaps_h': h(long_ if processed else 0.0),
+                'not_processed_h': h(0.0 if processed else in_tasks), 'dropped_episodes': dropped,
                 'other_mcaps': len(eps) - len(placed), 'clock_offset_h': round(offset / 3600, 2) if placed else '',
                 'status': status, 'note': note_of.get((station, name), '')})
-            print(f"  {name}: {len(intervals)} takes {in_tasks / 3600:.2f} h; {len(placed)} episodes "
-                f"{sum(e['duration'] for e in placed) / 3600:.2f} h" + (f"; {len(eps) - len(placed)} MCAP files "
+            print(f"  {name}: {len(intervals)} takes {in_tasks / 3600:.2f} h; {n_episodes} episodes "
+                f"{episodes_h / 3600:.2f} h ({output_kind or '-'})" + (f"; {len(eps) - len(placed)} MCAP files "
                 f"not from these takes" if len(eps) > len(placed) else '') + f" ({status})", flush=True)
 
     pathlib.Path(output).parent.mkdir(parents=True, exist_ok=True)
-    for suffix, rows in (('days', day_rows), ('tasks', task_rows)):
+    for suffix, rows in (('days', day_rows), ('tasks', task_rows), ('gaps', gap_rows)):
         if rows:
             with open(f"{output}_{suffix}.csv", 'w', newline='') as f:
                 w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator='\n')
@@ -382,12 +565,12 @@ def main(raw, mcap, output, stations, gap_sec, take_sec, notes, jobs):
             f"other short clips {d['short_clip_unused']:.1f}, takes outside tasks {d['take_outside_tasks']:.1f}, "
             f"cameras not all recording {d['cameras_not_all_recording']:.1f})\n"
             f"{'':<9} -> processed {t['in_tasks_h'] - t['not_processed_h']:.1f} h (not processed {t['not_processed_h']:.1f}) "
-            f"-> MCAP episodes {t['mcap_h']:.1f} h, {t['mcap_good_h']:.1f} h without gaps "
+            f"-> episodes {t['episodes_h']:.1f} h (MCAP: {t['episodes_without_pose_gaps_h']:.1f} h without pose gaps) "
             f"(between episodes up to {gap_sec:.0f} s {t['between_episodes_h']:.1f}, longer gaps {t['long_gaps_h']:.1f})")
     print(f"{'total':<9} recorded {total['recorded']:.1f} h -> in tasks {total['in_tasks']:.1f} h -> processed "
-        f"{total['in_tasks_h'] - total['not_processed_h']:.1f} h -> MCAP episodes {total['mcap_h']:.1f} h "
-        f"({total['mcap_good_h']:.1f} h without gaps)")
-    print(f"saved {output}_days.csv, {output}_tasks.csv")
+        f"{total['in_tasks_h'] - total['not_processed_h']:.1f} h -> episodes {total['episodes_h']:.1f} h "
+        f"({total['episodes_without_pose_gaps_h']:.1f} h without gaps)")
+    print(f"saved {output}_days.csv, {output}_tasks.csv, {output}_gaps.csv ({len(gap_rows)} gaps over {gap_sec:.0f} s)")
 
 # %%
 if __name__ == "__main__":

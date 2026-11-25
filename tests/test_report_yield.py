@@ -10,6 +10,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts_tag_tracking'))
 
+import json
 import report_yield as ry
 
 
@@ -63,7 +64,79 @@ def test_match_within_one_day():
     assert takes['task01'][0] == {5}, takes      # left and right still match the recording
 
 
+def test_long_gaps():
+    take = (1000.0, 1600.0)
+    eps = [(1010, 1100), (1110, 1300), (1400, 1590)]
+    assert ry.long_gaps(take, eps, 30.0) == [(1300, 1400)]
+    assert ry.long_gaps(take, [], 30.0) == [take]
+    assert ry.long_gaps((1000.0, 1600.0), [(1100, 1500)], 30.0) == [(1000.0, 1100), (1500, 1600.0)]
+
+
+SEGMENT = """demo_C3501326495617_2026.11.21_13.27.49.020600: 16 episodes (27.8-73.9s, total 585s), 16 idle periods, 36 bangs, 1 rejected stretches; wrist IMU to head audio lag 22 ms
+  rejected 00:00.0-00:02.1: too_short
+demo_C3501326495617_2026.11.21_13.22.53.325200: 8 episodes (11.1-37.1s, total 224s), 7 idle periods, 14 bangs, 0 rejected stretches
+"""
+TRIM = """python scripts_tag_tracking/03t_trim_docking.py -i session -c config.yaml
+  episode 1 00:00.0-00:33.8: task 00:04.9-00:30.2 (25.3s; removed 4.9s + 3.6s; start at dock, end at dock)
+  episode 2 00:35.6-01:12.1: task 00:38.4-01:07.6 (29.2s; removed 2.8s + 4.5s; start at bang, end at dock)
+  episode 3 01:20.3-01:50.9: cubes never left the dock area, no task
+demo_C3501326495617_2026.11.21_13.22.53.325200: usual removal at a bang boundary 3.6s, 0 episodes flagged for review
+demo_C3501326495617_2026.11.21_13.22.53.325200: 2 of 3 episodes with a task, 25.3-29.2s, total 54s
+  episode 1 00:02.0-00:40.0: task 00:05.0-00:35.0 (30.0s; removed 3.0s + 5.0s; start at bang, end at bang)
+  episode 2 01:00.0-01:30.0: task 01:02.0-01:28.0 (26.0s; removed 2.0s + 2.0s; start at bang, end at bang)
+demo_C3501326495617_2026.11.21_13.27.49.020600: usual removal at a bang boundary 3.0s
+demo_C3501326495617_2026.11.21_13.27.49.020600: 2 of 2 episodes with a task, 26.0-30.0s, total 56s
+"""
+PLAN = """demo_C3501326501951_2026.11.21_13.22.55.327200: gripper width in 100% of frames
+demo_C3501326495617_2026.11.21_13.22.53.325200: 14462 frames, valid poses right_cube 87%, left_cube 87%, all grippers 100%
+  episode 3 (80.3-110.9s): dropped, the cubes never left the dock
+demo_C3501326495617_2026.11.21_13.27.49.020600: 38001 frames, valid poses right_cube 91%, left_cube 90%, all grippers 100%
+  episode 2 (62.0-88.0s): dropped, not recorded by all wrist cameras
+3 episodes, 2123.4s of 3219.6s used (66%)
+"""
+
+
+def test_parse_logs():
+    p = ry.parse_logs(SEGMENT, TRIM, PLAN)
+    a, b = 'demo_C3501326495617_2026.11.21_13.22.53.325200', 'demo_C3501326495617_2026.11.21_13.27.49.020600'
+    assert p['kept'] == 3
+    assert p['heads'][a]['episodes'] == {1: (4.9, 30.2), 2: (38.4, 67.6)} and p['heads'][a]['no_task'] == {3: (80.3, 110.9)}
+    assert p['heads'][b]['episodes'] == {1: (5.0, 35.0), 2: (62.0, 88.0)}
+    assert p['heads'][b]['dropped'] == {2: (62.0, 88.0, 'not recorded by all wrist cameras')}
+    assert p['heads'][b]['rejected'] == [(0.0, 2.1, 'too_short')]
+    assert ry.gap_reasons((60, 90), [(62, 88, 'dropped: x'), (0, 2, 'rejected: y')]) == 'dropped: x'
+    assert ry.gap_reasons((200, 300), [(62, 88, 'dropped: x')]) == 'no episode found (no bangs, or idle)'
+
+
+def test_mp4_session():
+    # two takes, one head video each; the logs above: 3 kept episodes, one dropped, one without a task
+    files = {'s3://m/report.json': json.dumps({'episodes': [{'episode': f'episode_{k:06d}', 'status': 'ok', 'frames': 1800}
+            for k in range(3)]}),
+        's3://m/logs/06_segment_episodes.log': SEGMENT, 's3://m/logs/11_trim_docking.log': TRIM,
+        's3://m/logs/16_export_plan.log': PLAN}
+    real = ry.read_optional
+    ry.read_optional = lambda url: files.get(url)
+    try:
+        heads = [[(1000.0, 200.0, 'head/GX010001.MP4')], [(5000.0, 200.0, 'head/GX010002.MP4')]]
+        spans, items = [[], []], [[], []]
+        n, sec, dropped, status = ry.mp4_session('s3://m', heads, spans, items)
+    finally:
+        ry.read_optional = real
+    assert n == 3 and abs(sec - 3 * 1800 / (60000 / 1001)) < 1e-6 and status == 'processed (episode videos)', status
+    assert spans[0] == [(1004.9, 1030.2, 'episode_000000'), (1038.4, 1067.6, 'episode_000001')], spans
+    assert spans[1] == [(5005.0, 5035.0, 'episode_000002')], spans
+    assert (5062.0, 5088.0, 'dropped: not recorded by all wrist cameras') in items[1]
+    assert (1080.3, 1110.9, 'no task (cubes never left the dock)') in items[0]
+    assert 'not recorded by all wrist cameras: 1' in dropped
+    # the dropped episode explains the long gap in the second take
+    gaps = ry.long_gaps((5000.0, 5200.0), [(s, e) for s, e, _ in spans[1]], 30.0)
+    assert ry.gap_reasons(gaps[0], items[1]).startswith('dropped: not recorded by all wrist cameras'), gaps
+
+
 if __name__ == '__main__':
+    test_parse_logs()
+    test_mp4_session()
+    test_long_gaps()
     test_match_within_one_day()
     test_place_and_gaps()
     test_shared_and_names()
