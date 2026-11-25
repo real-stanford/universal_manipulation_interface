@@ -53,6 +53,7 @@ from umi.tag_tracking.camera_model import FisheyeCamera
 from umi.tag_tracking.config import EPISODE_DEFAULTS
 
 WRISTS = {'right': 0, 'left': 1}   # role -> robot_index / gripper_id (UMI convention)
+CUBE_PAIR_MIN_FRAMES = 3           # two cube tags grouped only if seen together in at least this many frames
 
 
 def session_videos(raw: pathlib.Path) -> dict:
@@ -175,13 +176,21 @@ def main(session, name, aruco_config, template, output, finger_size, cube_size, 
 
     # cubes from the head takes
     head_det = [d for t in videos['takes'] if 'head' in t for d in results[t['head']]['detections']]
-    cubes, pairs = cube_groups(head_det, classes['cube'])
+    cubes, pairs = cube_groups(head_det, classes['cube'], min_frames=CUBE_PAIR_MIN_FRAMES)
     for (a, b), x in sorted(pairs.items()):
         report.append(f"head takes: cube tags {a}-{b} seen together in {x['frames']} frames, "
             f"{x['ratio']:.1f} sides apart")
+    # a tag alone in its group, seen with no other tag in enough frames to group it (a face mostly
+    # turned away): not a cube of its own, reported like the tags never seen
+    rare = [g[0] for g in cubes if len(g) == 1
+        and all(x['frames'] < CUBE_PAIR_MIN_FRAMES for p, x in pairs.items() if g[0] in p)]
+    cubes = [g for g in cubes if not (len(g) == 1 and g[0] in rare)]
+    if rare:
+        report.append(f"WARNING cube-size tags seen by the head too rarely to group (with another tag in "
+            f"< {CUBE_PAIR_MIN_FRAMES} frames): {rare}; left out, add them to their cube if they belong to it")
     assert len(cubes) == 2, f"head takes: {len(cubes)} cubes {cubes}, expected 2; " \
         "check the pair distances above (two cubes always held together, or a tag never seen with another)"
-    unseen = sorted(classes['cube'] - {t for c in cubes for t in c})
+    unseen = sorted(classes['cube'] - {t for c in cubes for t in c} - set(rare))
     if unseen:
         report.append(f"WARNING cube-size tags in the aruco config never seen by the head: {unseen} "
             "(a cube face turned away, or not in this station); add them to their cube if they belong to it")
