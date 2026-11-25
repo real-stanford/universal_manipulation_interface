@@ -3,10 +3,10 @@
     "final_reproj_error": 0.7338899721817205,
     "init_line_delay_us": 8.226495726495727,
     "q_i_c": {
-        "w": -0.036422736488264884,
-        "x": -0.03529664114605717,
-        "y": -0.7063822217162319,
-        "z": 0.7060111105597086
+        "w": 0.0009800761054769387,
+        "x": 0.0019901167073765494,
+        "y": -0.7066029692735506,
+        "z": 0.7076067571046225
     },
     "r3_dt": 0.14697797940122861,
     "so3_dt": 0.0777753395894244,
@@ -21,5 +21,12 @@
         "y": -0.007701052182371662,
         "z": -0.03197600250228109
     },
-    "t_i_c_source": "set by import_openicc_calibration.py --translation_mm -0.4,-22.8,3.9 (not this camera's estimate)"
+    "t_i_c_source": "set by import_openicc_calibration.py --translation_mm -0.4,-22.8,3.9 (not this camera's estimate)",
+    "q_i_c_estimated": {
+        "w": -0.036422736488264884,
+        "x": -0.03529664114605717,
+        "y": -0.7063822217162319,
+        "z": 0.7060111105597086
+    },
+    "q_i_c_source": "set by import_openicc_calibration.py --rotation_from station2_left,station2_right,station4_left,station4_right,station5_head,station5_left,station5_right (their mean, not this camera's estimate)"
 }

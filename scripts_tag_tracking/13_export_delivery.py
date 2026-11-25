@@ -435,7 +435,7 @@ def main(input, config, delivery, output, episodes, num_workers, no_annotations)
                 'extrinsic_direction': f'wrist_{side}_optical from imu_{side} (child in parent)',
                 'is_primary': False,
                 'calibration_source': 'none' if T_cam_imu is None else
-                    ('approximate' if 't_i_c_source' in ci else 'measured'),
+                    ('approximate' if 't_i_c_source' in ci or 'q_i_c_source' in ci else 'measured'),
             }, {
                 'sensor_id': f'tcp_{side}', 'sensor_type': 'pose_tracker', 'role': f'wrist_{side}',
                 'parent_frame': 'world', 'child_frame': f'tcp_{side}',
@@ -490,7 +490,7 @@ def main(input, config, delivery, output, episodes, num_workers, no_annotations)
                 'mcap_topic': '/head/imu', 'message_schema': 'umi.msg.ImuSample',
                 'extrinsic_44': mat44(np.linalg.inv(T_imu_cam)),
                 'extrinsic_direction': 'head_optical from imu_head (child in parent)',
-                'is_primary': False, 'calibration_source': 'approximate' if 't_i_c_source' in ci else 'measured',
+                'is_primary': False, 'calibration_source': 'approximate' if 't_i_c_source' in ci or 'q_i_c_source' in ci else 'measured',
             })
             streams.append({'id': 'imu_head', 'type': 'imu', 'sample_count': counts.get('/head/imu', 0),
                 'native_rate_hz': head_imu_rate})
