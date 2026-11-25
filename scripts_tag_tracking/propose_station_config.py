@@ -42,6 +42,7 @@ os.chdir(ROOT_DIR)
 # %%
 import concurrent.futures
 import csv
+import multiprocessing
 import pathlib
 import time
 import click
@@ -159,7 +160,8 @@ def main(session, name, aruco_config, template, output, finger_size, cube_size, 
         f"{min(jobs, len(jobs_in))} at a time", flush=True)
     start = time.time()
     results = dict()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as pool:
+    # spawn, not fork: a forked worker can inherit a held lock (decoder / OpenCV threads) and hang idle
+    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context('spawn')) as pool:
         futures = {pool.submit(sample_detections, p, predefined, every_sec, m): p for p, m in jobs_in}
         for k, f in enumerate(concurrent.futures.as_completed(futures), start=1):
             p = futures[f]
