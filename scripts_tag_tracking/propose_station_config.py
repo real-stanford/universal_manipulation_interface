@@ -43,6 +43,7 @@ os.chdir(ROOT_DIR)
 import concurrent.futures
 import csv
 import pathlib
+import time
 import click
 import yaml
 from umi.common.exiftool_util import ExifTool
@@ -137,6 +138,8 @@ def main(session, name, aruco_config, template, output, finger_size, cube_size, 
     by_role = {'head': [t['head'] for t in videos['takes'] if 'head' in t] + videos['head_mapping']}
     for role in WRISTS:
         by_role[role] = [t[role] for t in videos['takes'] if role in t] + [videos['gripper_calibration'][role]]
+    print(f"{len(videos['takes'])} takes, gripper calibration and head mapping videos in {raw}; reading camera serials",
+        flush=True)
     with ExifTool() as et:
         serial_of = {p: str(list(et.get_metadata(str(p)))[0].get('QuickTime:CameraSerialNumber'))
             for paths in by_role.values() for p in paths}
@@ -152,9 +155,16 @@ def main(session, name, aruco_config, template, output, finger_size, cube_size, 
     jobs_in = [(p, None) for p in videos['head_mapping']] + \
         [(videos['gripper_calibration'][r], None) for r in WRISTS] + \
         [(p, max_sec) for t in videos['takes'] for p in t.values()]
+    print(f"reading tags in {len(jobs_in)} videos (a frame every {every_sec:g} s; takes: the first {max_sec:g} s), "
+        f"{min(jobs, len(jobs_in))} at a time", flush=True)
+    start = time.time()
+    results = dict()
     with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as pool:
-        results = dict(zip([p for p, _ in jobs_in], pool.map(sample_detections, [p for p, _ in jobs_in],
-            [predefined] * len(jobs_in), [every_sec] * len(jobs_in), [m for _, m in jobs_in])))
+        futures = {pool.submit(sample_detections, p, predefined, every_sec, m): p for p, m in jobs_in}
+        for k, f in enumerate(concurrent.futures.as_completed(futures), start=1):
+            p = futures[f]
+            results[p] = f.result()
+            print(f"  {k}/{len(jobs_in)} {p.parent.name}/{p.name} ({time.time() - start:.0f} s)", flush=True)
     report = Report()
     report.append(f"cameras: head {serials['head']}, right {serials['right']}, left {serials['left']}")
 
