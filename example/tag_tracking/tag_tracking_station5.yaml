@@ -16,8 +16,10 @@ aruco_config: aruco_config.yaml
 corner_noise: corner_noise.json
 gripper_config: gripper_config_station5.yaml
 head_camera: C3501326499367
-# setup_calibration: none yet (calibrate_setup.py on a station5 session -> setup_station5);
-# until then each session calibrates its bodies and TCPs from its own head mapping
+# setup calibration from station5 task01 2026-11-24 (calibrate_setup.py on the devbox, 2026-11-25): environment
+# tags 38-41, 46, 47 (variance factor 6.35), cubes 2-5 / 8-11, cube -> wrist spread 5.5 / 4.2 mm; the right
+# gripper's camera 85 mm from its cube, the left's 132 mm (cubes mounted differently on the two grippers)
+setup_calibration: setup_station5
 head_imu:
   cam_imu_calibration: openicc/station5_head/cam_imu/cam_imu_calib_result_GX010634.json
   noise_setting: gopro12_wide_fisheye_setting_720_C3501326499367.yaml
